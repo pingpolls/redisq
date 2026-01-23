@@ -5,7 +5,7 @@ interface WorkerMessage {
     data: {
         workerIndex: number;
         messagesPerWorker: number;
-        messageSize: number;
+        testMessage: string;
         qname: string;
         redisConfig: {
             host: string;
@@ -17,12 +17,11 @@ interface WorkerMessage {
 
 self.addEventListener("message", async (event: MessageEvent<WorkerMessage>) => {
     if (event.data.type === "start") {
-        const { messagesPerWorker, messageSize, qname, redisConfig } =
+        const { messagesPerWorker, testMessage, qname, redisConfig } =
             event.data.data;
 
         try {
             const queue = new RedisQueue(redisConfig);
-            const testMessage = "x".repeat(messageSize);
             const latencies: number[] = [];
 
             for (let i = 0; i < messagesPerWorker; i++) {

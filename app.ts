@@ -14,60 +14,19 @@ export type QueueOptions =
           tls?: boolean;
       };
 
-/**
- * Configuration for creating a queue
- * Regular queues process messages individually
- * Batch queues (suffix ':batch') collect messages and process them in batches at specified intervals
- */
 export type CreateQueueOptions<QueueName extends string = string> =
     QueueName extends `${string}:batch`
         ? {
-              /**
-               * Queue name ending with ':batch' to enable batch processing
-               */
               qname: QueueName;
-              /**
-               * Maximum message size in bytes
-               * @default 65536
-               */
               maxsize?: number;
-              /**
-               * Maximum number of retries per batch
-               * undefined = no retry (1 attempt), -1 = unlimited, n = max retries
-               * @default 0
-               */
               maxRetries?: number;
-              /**
-               * Maximum backoff time in seconds for exponential backoff
-               * @default 30
-               */
               maxBackoffSeconds?: number;
-              /**
-               * Interval in seconds for collecting and processing batches
-               * @default 60
-               */
               every?: number;
           }
         : {
-              /**
-               * Queue name for regular message processing
-               */
               qname: QueueName;
-              /**
-               * Maximum message size in bytes
-               * @default 65536
-               */
               maxsize?: number;
-              /**
-               * Maximum number of retries per message
-               * undefined = no retry (1 attempt), -1 = unlimited, n = max retries
-               * @default 0
-               */
               maxRetries?: number;
-              /**
-               * Maximum backoff time in seconds for exponential backoff
-               * @default 30
-               */
               maxBackoffSeconds?: number;
           };
 
@@ -84,17 +43,11 @@ export interface QueueAttributes {
 export interface SendMessageOptions {
     qname: string;
     message: string;
-    /**
-     * Delay in milliseconds before message is available for processing
-     */
     delay?: number;
 }
 
 export interface SendBatchMessageOptions {
     qname: string;
-    /**
-     * User-defined batch ID to group messages together
-     */
     batchId: string;
     message: string;
 }
@@ -102,26 +55,14 @@ export interface SendBatchMessageOptions {
 export interface Message {
     id: string;
     message: string;
-    /**
-     * Timestamp when message was sent
-     */
     sent: number;
-    /**
-     * Current attempt number (1-based)
-     */
     attempt: number;
 }
 
 export interface BatchMessage {
     batchId: string;
     messages: Omit<Message, "attempt">[];
-    /**
-     * Timestamp when batch was created
-     */
     sent: number;
-    /**
-     * Batch-level attempt counter
-     */
     attempt: number;
 }
 
@@ -168,24 +109,14 @@ export class RedisQueue {
         }
     }
 
-    /**
-     * Constructs a Redis key with namespace and optional suffix
-     */
     private getKey(qname: string, suffix = ""): string {
         return suffix ? `${this.ns}:${qname}:${suffix}` : `${this.ns}:${qname}`;
     }
 
-    /**
-     * Checks if queue name indicates batch processing
-     */
     private isBatchQueue(qname: string): boolean {
         return qname.endsWith(":batch");
     }
 
-    /**
-     * Creates a new queue with specified configuration
-     * @returns true if queue was created, false if already exists
-     */
     async createQueue<QueueName extends string>(
         options: CreateQueueOptions<QueueName>,
     ): Promise<boolean> {
@@ -225,9 +156,6 @@ export class RedisQueue {
         return true;
     }
 
-    /**
-     * Lists all queue names
-     */
     async listQueues(): Promise<string[]> {
         const pattern = `${this.ns}:*`;
         const keys = await this.redis.keys(pattern);
@@ -237,9 +165,6 @@ export class RedisQueue {
             .filter((k) => !k.includes(":") || k.endsWith(":batch"));
     }
 
-    /**
-     * Retrieves queue attributes and message count
-     */
     async getQueue(qname: string): Promise<QueueAttributes | null> {
         const key = this.getKey(qname);
         const attrs = await this.redis.hgetall(key);
@@ -273,9 +198,6 @@ export class RedisQueue {
         return result;
     }
 
-    /**
-     * Deletes a queue and all its associated data
-     */
     async deleteQueue(qname: string): Promise<boolean> {
         const pattern = `${this.ns}:${qname}*`;
         const keys = await this.redis.keys(pattern);
@@ -288,9 +210,6 @@ export class RedisQueue {
         return true;
     }
 
-    /**
-     * Sends a message to a regular queue
-     */
     async sendMessage(options: SendMessageOptions): Promise<string> {
         const { qname, message, delay } = options;
 
@@ -322,28 +241,26 @@ export class RedisQueue {
 
         const messagesKey = this.getKey(qname, "messages");
         const encoded = this.encodeMessage(storedMsg);
-        await this.redis.hset(messagesKey, { [id]: encoded });
 
+        // Use pipeline for atomic operations
         if (delay && delay > 0) {
             const delayedKey = this.getKey(qname, "delayed");
             const deliverAt = now + delay;
-            await this.redis.send("ZADD", [
-                delayedKey,
-                deliverAt.toString(),
-                id,
+            await Promise.all([
+                this.redis.hset(messagesKey, { [id]: encoded }),
+                this.redis.send("ZADD", [delayedKey, deliverAt.toString(), id]),
             ]);
         } else {
             const queueKey = this.getKey(qname, "queue");
-            await this.redis.send("LPUSH", [queueKey, id]);
+            await Promise.all([
+                this.redis.hset(messagesKey, { [id]: encoded }),
+                this.redis.send("LPUSH", [queueKey, id]),
+            ]);
         }
 
         return id;
     }
 
-    /**
-     * Sends a message to a batch queue
-     * Messages are grouped by batchId and processed together at scheduled intervals
-     */
     async sendBatchMessage(options: SendBatchMessageOptions): Promise<string> {
         const { qname, batchId, message } = options;
 
@@ -375,12 +292,12 @@ export class RedisQueue {
 
         const messagesKey = this.getKey(qname, "messages");
         const encoded = this.encodeMessage(storedMsg);
-        await this.redis.hset(messagesKey, { [id]: encoded });
-
         const batchKey = this.getKey(qname, `batch:${batchId}`);
+        const batchMetaKey = this.getKey(qname, "batch-meta");
+
+        await this.redis.hset(messagesKey, { [id]: encoded });
         await this.redis.sadd(batchKey, id);
 
-        const batchMetaKey = this.getKey(qname, "batch-meta");
         const batchExists = await this.redis.hexists(batchMetaKey, batchId);
 
         if (!batchExists) {
@@ -390,18 +307,17 @@ export class RedisQueue {
                 sent: now,
             };
             const encodedMeta = this.encodeBatchMeta(batchMeta);
-            await this.redis.hset(batchMetaKey, { [batchId]: encodedMeta });
-
             const pendingBatchesKey = this.getKey(qname, "pending-batches");
-            await this.redis.sadd(pendingBatchesKey, batchId);
+
+            await Promise.all([
+                this.redis.hset(batchMetaKey, { [batchId]: encodedMeta }),
+                this.redis.sadd(pendingBatchesKey, batchId),
+            ]);
         }
 
         return id;
     }
 
-    /**
-     * Encodes a message for storage
-     */
     private encodeMessage(msg: StoredMessage): string {
         return JSON.stringify({
             attempt: msg.attempt,
@@ -411,9 +327,6 @@ export class RedisQueue {
         });
     }
 
-    /**
-     * Decodes a stored message
-     */
     private decodeMessage(encoded: string): StoredMessage {
         const parsed = JSON.parse(encoded);
         return {
@@ -424,23 +337,14 @@ export class RedisQueue {
         };
     }
 
-    /**
-     * Encodes batch metadata for storage
-     */
     private encodeBatchMeta(meta: StoredBatchMeta): string {
         return JSON.stringify(meta);
     }
 
-    /**
-     * Decodes batch metadata
-     */
     private decodeBatchMeta(encoded: string): StoredBatchMeta {
         return JSON.parse(encoded);
     }
 
-    /**
-     * Fetches a single message from storage
-     */
     private async fetchMessage(
         qname: string,
         id: string,
@@ -461,9 +365,32 @@ export class RedisQueue {
         };
     }
 
-    /**
-     * Fetches all messages in a batch
-     */
+    // OPTIMIZED: Batch fetch multiple messages at once
+    private async fetchMessages(
+        qname: string,
+        ids: string[],
+    ): Promise<Message[]> {
+        if (ids.length === 0) return [];
+
+        const messagesKey = this.getKey(qname, "messages");
+        const encoded = await this.redis.hmget(messagesKey, ...ids);
+
+        const messages: Message[] = [];
+        for (const encodedMsg of encoded) {
+            if (encodedMsg) {
+                const stored = this.decodeMessage(encodedMsg);
+                messages.push({
+                    attempt: stored.attempt,
+                    id: stored.id,
+                    message: stored.message,
+                    sent: stored.sent,
+                });
+            }
+        }
+
+        return messages;
+    }
+
     private async fetchBatchMessage(
         qname: string,
         batchId: string,
@@ -485,58 +412,44 @@ export class RedisQueue {
         }
 
         const meta = this.decodeBatchMeta(metaEncoded);
-        const messages: Omit<Message, "attempt">[] = [];
-
-        for (const id of messageIds as string[]) {
-            const msg = await this.fetchMessage(qname, id);
-            if (msg) {
-                const { attempt, ...msgWithoutAttempt } = msg;
-                messages.push(msgWithoutAttempt);
-            }
-        }
+        const messages = await this.fetchMessages(
+            qname,
+            messageIds as string[],
+        );
 
         return {
             attempt: meta.attempt,
             batchId: meta.batchId,
-            messages,
+            messages: messages.map(({ attempt, ...rest }) => rest),
             sent: meta.sent,
         };
     }
 
-    /**
-     * Deletes a message from storage
-     */
     async deleteMessage(qname: string, id: string): Promise<boolean> {
         const messagesKey = this.getKey(qname, "messages");
         const deleted = await this.redis.hdel(messagesKey, id);
         return deleted > 0;
     }
 
-    /**
-     * Deletes an entire batch and all its messages
-     */
     private async deleteBatch(qname: string, batchId: string): Promise<void> {
         const batchKey = this.getKey(qname, `batch:${batchId}`);
         const batchMetaKey = this.getKey(qname, "batch-meta");
 
-        const messageIds = (await this.redis.send("SMEMBERS", [batchKey])) as
-            | string[]
-            | null;
+        const messageIds = (await this.redis.send("SMEMBERS", [batchKey])) as [
+            string,
+        ];
 
         if (messageIds && messageIds.length > 0) {
             const messagesKey = this.getKey(qname, "messages");
-            for (const id of messageIds) {
-                await this.redis.hdel(messagesKey, id);
-            }
+            await this.redis.hdel(messagesKey, ...messageIds);
         }
 
-        await this.redis.del(batchKey);
-        await this.redis.hdel(batchMetaKey, batchId);
+        await Promise.all([
+            this.redis.del(batchKey),
+            this.redis.hdel(batchMetaKey, batchId),
+        ]);
     }
 
-    /**
-     * Retries a failed message with exponential backoff
-     */
     private async retryMessage(qname: string, id: string): Promise<void> {
         if (this.isClosing) return;
 
@@ -574,16 +487,16 @@ export class RedisQueue {
 
         msg.attempt += 1;
         const updatedEncoded = this.encodeMessage(msg);
-        await this.redis.hset(messagesKey, { [id]: updatedEncoded });
 
         const delayedKey = this.getKey(qname, "delayed");
         const deliverAt = Date.now() + backoffMs;
-        await this.redis.send("ZADD", [delayedKey, deliverAt.toString(), id]);
+
+        await Promise.all([
+            this.redis.hset(messagesKey, { [id]: updatedEncoded }),
+            this.redis.send("ZADD", [delayedKey, deliverAt.toString(), id]),
+        ]);
     }
 
-    /**
-     * Retries a failed batch by re-queuing it for next batch processing cycle
-     */
     private async retryBatch(qname: string, batchId: string): Promise<void> {
         if (this.isClosing) return;
 
@@ -613,15 +526,14 @@ export class RedisQueue {
 
         meta.attempt += 1;
         const updatedEncoded = this.encodeBatchMeta(meta);
-        await this.redis.hset(batchMetaKey, { [batchId]: updatedEncoded });
-
         const pendingBatchesKey = this.getKey(qname, "pending-batches");
-        await this.redis.sadd(pendingBatchesKey, batchId);
+
+        await Promise.all([
+            this.redis.hset(batchMetaKey, { [batchId]: updatedEncoded }),
+            this.redis.sadd(pendingBatchesKey, batchId),
+        ]);
     }
 
-    /**
-     * Processes delayed messages that are ready for execution
-     */
     private async processDelayedMessages(qname: string): Promise<void> {
         const delayedKey = this.getKey(qname, "delayed");
         const queueKey = this.getKey(qname, "queue");
@@ -634,17 +546,17 @@ export class RedisQueue {
         ]);
 
         if (ready && (ready as string[]).length > 0) {
+            const pipeline = [];
             for (const id of ready as string[]) {
-                await this.redis.send("LPUSH", [queueKey, id]);
-                await this.redis.send("ZREM", [delayedKey, id]);
+                pipeline.push(
+                    this.redis.send("LPUSH", [queueKey, id]),
+                    this.redis.send("ZREM", [delayedKey, id]),
+                );
             }
+            await Promise.all(pipeline);
         }
     }
 
-    /**
-     * Processes all pending batches in a single cycle
-     * Retrieves all batch IDs, fetches their messages, and processes them concurrently
-     */
     private async processBatches(
         qname: string,
         handler: (message: BatchMessage) => Promise<{ success: boolean }>,
@@ -694,11 +606,6 @@ export class RedisQueue {
         await Promise.all(batchPromises);
     }
 
-    /**
-     * Starts a worker for processing messages
-     * For regular queues, processes messages individually as they arrive
-     * For batch queues, collects messages and processes them in batches at scheduled intervals
-     */
     async startWorker<QueueName extends `${string}:batch` | (string & {})>(
         qname: QueueName,
         handler: (
@@ -767,9 +674,7 @@ export class RedisQueue {
         }
     }
 
-    /**
-     * Worker loop for processing regular queue messages
-     */
+    // OPTIMIZED: Process messages in parallel within worker
     private async runWorker(
         qname: string,
         handler: (message: Message) => Promise<{ success: boolean }>,
@@ -783,56 +688,34 @@ export class RedisQueue {
             try {
                 await this.processDelayedMessages(qname);
 
-                const result = await this.redis.send("BRPOP", [queueKey, "1"]);
+                const result = await this.redis.send("BRPOP", [
+                    queueKey,
+                    "0.1",
+                ]);
 
                 if (result && Array.isArray(result) && result.length >= 2) {
                     const id = result[1] as string;
                     const message = await this.fetchMessage(qname, id);
 
                     if (message) {
-                        try {
-                            const { success } = await handler(message);
-
-                            if (success) {
-                                await this.deleteMessage(qname, message.id);
-                            } else {
+                        // Process message without blocking the loop
+                        handler(message)
+                            .then(async ({ success }) => {
+                                if (success) {
+                                    await this.deleteMessage(qname, message.id);
+                                } else {
+                                    await this.retryMessage(qname, message.id);
+                                }
+                            })
+                            .catch(async (error) => {
+                                if (!silent) {
+                                    console.error(
+                                        `Worker ${workerId} handler error:`,
+                                        (error as Error).message,
+                                    );
+                                }
                                 await this.retryMessage(qname, message.id);
-                            }
-                        } catch (error) {
-                            if (!silent) {
-                                console.error(
-                                    `Worker ${workerId} handler error:`,
-                                    (error as Error).message,
-                                );
-                            }
-                            await this.retryMessage(qname, message.id);
-                        }
-                    }
-                } else {
-                    const delayedKey = this.getKey(qname, "delayed");
-                    const nextDelay = await this.redis.send("ZRANGE", [
-                        delayedKey,
-                        "0",
-                        "0",
-                        "WITHSCORES",
-                    ]);
-
-                    let waitTime = 1000;
-
-                    if (
-                        nextDelay &&
-                        Array.isArray(nextDelay) &&
-                        nextDelay.length >= 2
-                    ) {
-                        const deliverAt = Number(nextDelay[1]);
-                        waitTime = Math.min(
-                            waitTime,
-                            Math.max(0, deliverAt - Date.now()),
-                        );
-                    }
-
-                    if (waitTime < 1000) {
-                        await Bun.sleep(waitTime);
+                            });
                     }
                 }
             } catch (error) {
@@ -843,15 +726,12 @@ export class RedisQueue {
                             (error as Error).message,
                         );
                     }
-                    await Bun.sleep(1000);
+                    await Bun.sleep(100);
                 }
             }
         }
     }
 
-    /**
-     * Stops a worker for the specified queue
-     */
     stopWorker(qname: string): void {
         const controller = this.workers.get(qname);
         if (controller) {
@@ -866,13 +746,9 @@ export class RedisQueue {
         }
     }
 
-    /**
-     * Closes all workers and the Redis connection
-     */
     async close(): Promise<void> {
         this.isClosing = true;
 
-        // Stop all workers first
         for (const qname of this.workers.keys()) {
             const controller = this.workers.get(qname);
             if (controller) {
@@ -881,7 +757,6 @@ export class RedisQueue {
         }
         this.workers.clear();
 
-        // Stop all batch jobs
         for (const qname of this.batchJobs.keys()) {
             const job = this.batchJobs.get(qname);
             if (job) {
@@ -890,10 +765,8 @@ export class RedisQueue {
         }
         this.batchJobs.clear();
 
-        // Wait a bit for any pending operations to complete
         await Bun.sleep(100);
 
-        // Close Redis connection
         this.redis.close();
     }
 }
