@@ -1,5 +1,8 @@
 {
     "author": "PingPolls",
+    "dependencies": {
+        "croner": "^9.1.0"
+    },
     "description": "RedisQ is simple message queue that utilizes Bun runtime for high performance read/writes.",
     "devDependencies": {
         "@biomejs/biome": "https://pkg.pr.new/@biomejs/biome@0196c0e",
@@ -19,7 +22,7 @@
         "typescript": "^5"
     },
     "scripts": {
-        "test": "bun test"
+        "check": "bun test --timeout 10000"
     },
     "type": "module",
     "version": "0.1.0"
