@@ -1,4 +1,4 @@
-# RedisQueue
+# RedisQ
 
 A lightweight, type-safe Redis-based message queue for Bun with support for delayed messages, retries, and batch processing.
 
@@ -754,7 +754,7 @@ describe('Queue Tests', () => {
 Run the stress test to benchmark on your hardware:
 
 ```bash
-bun run stress-test.ts
+bun stress
 ```
 
 Expected results on limited 2CPU 2GB Dockerized WSL2 with:
