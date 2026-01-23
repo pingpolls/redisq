@@ -17,7 +17,7 @@
     ],
     "license": "Apache License 2.0",
     "module": "app.ts",
-    "name": "redisq",
+    "name": "@pingpolls/redisq",
     "peerDependencies": {
         "typescript": "^5"
     },
