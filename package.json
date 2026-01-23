@@ -22,7 +22,8 @@
         "typescript": "^5"
     },
     "scripts": {
-        "check": "bun test --timeout 10000"
+        "check": "bun test --timeout 10000",
+        "stress": "bun benchmark/stress.ts"
     },
     "type": "module",
     "version": "0.1.0"

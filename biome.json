@@ -1,79 +1,80 @@
 {
-	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-	"assist": {
-		"actions": {
-			"source": {
-				"organizeImports": "on",
-				"useSortedKeys": "on"
-			}
-		}
-	},
-	"css": {
-		"parser": {
-			"tailwindDirectives": true
-		}
-	},
-	"files": {
-		"ignoreUnknown": false,
-		"includes": [
-			"./**",
-			"!**/build",
-			"!**/node_modules",
-			"!bun.lock",
-			"!bun.lockd"
-		]
-	},
-	"formatter": {
-		"attributePosition": "auto",
-		"enabled": true,
-		"indentStyle": "space",
-		"indentWidth": 4
-	},
-	"html": {
-		"experimentalFullSupportEnabled": true
-	},
-	"javascript": {
-		"formatter": {
-			"quoteStyle": "double",
-			"semicolons": "always",
-			"trailingCommas": "all"
-		}
-	},
-	"json": {
-		"formatter": {
-			"trailingCommas": "none"
-		},
-		"parser": {
-			"allowTrailingCommas": true
-		}
-	},
-	"linter": {
-		"enabled": true,
-		"rules": {
-			"a11y": {},
-			"complexity": {},
-			"recommended": true,
-			"style": {
-				"noInferrableTypes": "error",
-				"noParameterAssign": "error",
-				"noUnusedTemplateLiteral": "error",
-				"noUselessElse": "error",
-				"useAsConstAssertion": "error",
-				"useDefaultParameterLast": "error",
-				"useEnumInitializers": "error",
-				"useNamingConvention": "off",
-				"useNumberNamespace": "error",
-				"useSelfClosingElements": "error",
-				"useSingleVarDeclarator": "error"
-			},
-			"suspicious": {
-				"noUnsafeDeclarationMerging": "off"
-			}
-		}
-	},
-	"vcs": {
-		"clientKind": "git",
-		"enabled": true,
-		"useIgnoreFile": false
-	}
+    "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+    "assist": {
+        "actions": {
+            "source": {
+                "organizeImports": "on",
+                "useSortedKeys": "on"
+            }
+        }
+    },
+    "css": {
+        "parser": {
+            "tailwindDirectives": true
+        }
+    },
+    "files": {
+        "ignoreUnknown": false,
+        "includes": [
+            "./**",
+            "!**/build",
+            "!benchmark",
+            "!**/node_modules",
+            "!bun.lock",
+            "!bun.lockd"
+        ]
+    },
+    "formatter": {
+        "attributePosition": "auto",
+        "enabled": true,
+        "indentStyle": "space",
+        "indentWidth": 4
+    },
+    "html": {
+        "experimentalFullSupportEnabled": true
+    },
+    "javascript": {
+        "formatter": {
+            "quoteStyle": "double",
+            "semicolons": "always",
+            "trailingCommas": "all"
+        }
+    },
+    "json": {
+        "formatter": {
+            "trailingCommas": "none"
+        },
+        "parser": {
+            "allowTrailingCommas": true
+        }
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "a11y": {},
+            "complexity": {},
+            "recommended": true,
+            "style": {
+                "noInferrableTypes": "error",
+                "noParameterAssign": "error",
+                "noUnusedTemplateLiteral": "error",
+                "noUselessElse": "error",
+                "useAsConstAssertion": "error",
+                "useDefaultParameterLast": "error",
+                "useEnumInitializers": "error",
+                "useNamingConvention": "off",
+                "useNumberNamespace": "error",
+                "useSelfClosingElements": "error",
+                "useSingleVarDeclarator": "error"
+            },
+            "suspicious": {
+                "noUnsafeDeclarationMerging": "off"
+            }
+        }
+    },
+    "vcs": {
+        "clientKind": "git",
+        "enabled": true,
+        "useIgnoreFile": false
+    }
 }
