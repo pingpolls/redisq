@@ -1,11 +1,14 @@
-import RedisQueue from "./index";
+import { expect, test } from "bun:test";
+import RedisQueue from "./app";
 
-async function testBasicSendReceive() {
-    console.log("\n=== Test: Basic Send/Receive ===");
-    const queue = new RedisQueue({
-        host: "127.0.0.1",
-        port: "6379",
-    });
+const redisConfig = {
+    host: process.env.REDIS_HOST || "127.0.0.1",
+    namespace: "redisq-testing",
+    port: process.env.REDIS_PORT || "6379",
+};
+
+test("Basic Send/Receive", async () => {
+    const queue = new RedisQueue(redisConfig);
 
     await queue.createQueue({ qname: "test-basic" });
 
@@ -14,24 +17,21 @@ async function testBasicSendReceive() {
         message,
         qname: "test-basic",
     });
-    console.log(`Sent message: ${id}`);
 
     const received = await queue.receiveMessage("test-basic");
     if (received && !("batchId" in received)) {
-        console.log(`Received: ${new TextDecoder().decode(received.message)}`);
-        console.log(`Attempt: ${received.attempt}`);
+        expect(received.message).toEqual(message);
+        expect(received.attempt).toBe(1);
+        expect(received.id).toEqual(id);
     }
 
     await queue.deleteQueue("test-basic");
     await queue.close();
-}
+});
 
 async function testRetrySystem() {
     console.log("\n=== Test: Retry System ===");
-    const queue = new RedisQueue({
-        host: "127.0.0.1",
-        port: "6379",
-    });
+    const queue = new RedisQueue(redisConfig);
 
     await queue.createQueue({ qname: "test-retry" });
 
@@ -75,10 +75,7 @@ async function testRetrySystem() {
 
 async function testBatchMessages() {
     console.log("\n=== Test: Batch Messages ===");
-    const queue = new RedisQueue({
-        host: "127.0.0.1",
-        port: "6379",
-    });
+    const queue = new RedisQueue(redisConfig);
 
     await queue.createQueue({ qname: "test-batch" });
 
@@ -113,10 +110,7 @@ async function testBatchMessages() {
 
 async function testMultipleBatches() {
     console.log("\n=== Test: Multiple Batches (Fixed FIFO) ===");
-    const queue = new RedisQueue({
-        host: "127.0.0.1",
-        port: "6379",
-    });
+    const queue = new RedisQueue(redisConfig);
 
     await queue.createQueue({ qname: "test-multi-batch" });
 
@@ -178,10 +172,7 @@ async function testMultipleBatches() {
 
 async function testBatchRetry() {
     console.log("\n=== Test: Batch Retry (Per-Message) ===");
-    const queue = new RedisQueue({
-        host: "127.0.0.1",
-        port: "6379",
-    });
+    const queue = new RedisQueue(redisConfig);
 
     await queue.createQueue({ qname: "test-batch-retry" });
 
@@ -232,7 +223,6 @@ async function testBatchRetry() {
 
 // Run all tests
 async function runAllTests() {
-    await testBasicSendReceive();
     await testBatchMessages();
     await testMultipleBatches(); // NEW: Test multiple batches work correctly
     await testRetrySystem(); // Long running

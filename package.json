@@ -13,7 +13,7 @@
         "bun"
     ],
     "license": "Apache License 2.0",
-    "module": "index.ts",
+    "module": "app.ts",
     "name": "redisq",
     "peerDependencies": {
         "typescript": "^5"
