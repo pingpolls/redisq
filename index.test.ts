@@ -235,8 +235,8 @@ async function runAllTests() {
     await testBasicSendReceive();
     await testBatchMessages();
     await testMultipleBatches(); // NEW: Test multiple batches work correctly
-    // await testRetrySystem(); // Long running
-    // await testBatchRetry(); // Test batch retry mechanism
+    await testRetrySystem(); // Long running
+    await testBatchRetry(); // Test batch retry mechanism
 }
 
 // Uncomment to run tests
