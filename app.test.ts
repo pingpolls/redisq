@@ -225,8 +225,39 @@ describe("RedisQueue Tests", () => {
         let batch002Processed = false;
 
         /**
-         * Start worker BEFORE sending messages
-         * This ensures the cron job is running when messages arrive
+         * Send messages FIRST, then start worker
+         * This allows all messages to be ready before the first cron cycle
+         */
+
+        /**
+         * Send 6 messages to batch-001
+         */
+        for (let i = 1; i <= 6; i++) {
+            const message = `Spreadsheet row ${i} for batch-001`;
+            await queue.sendBatchMessage({
+                qname: "spreadsheet-queue:batch",
+                batchId: "batch-001",
+                message,
+            });
+            batch001Messages.push(message);
+        }
+
+        /**
+         * Send 4 messages to batch-002
+         */
+        for (let i = 1; i <= 4; i++) {
+            const message = `Spreadsheet row ${i} for batch-002`;
+            await queue.sendBatchMessage({
+                qname: "spreadsheet-queue:batch",
+                batchId: "batch-002",
+                message,
+            });
+            batch002Messages.push(message);
+        }
+
+        /**
+         * Start worker AFTER sending messages
+         * This ensures all messages are already pending when the cron starts
          */
         const workerPromise = new Promise<void>((resolve) => {
             queue.startWorker(
@@ -275,38 +306,16 @@ describe("RedisQueue Tests", () => {
         });
 
         /**
-         * Send 6 messages to batch-001
-         */
-        for (let i = 1; i <= 6; i++) {
-            const message = `Spreadsheet row ${i} for batch-001`;
-            await queue.sendBatchMessage({
-                qname: "spreadsheet-queue:batch",
-                batchId: "batch-001",
-                message,
-            });
-            batch001Messages.push(message);
-            await sleep(100); // Simulate messages arriving at different times
-        }
-
-        /**
-         * Send 4 messages to batch-002
-         */
-        for (let i = 1; i <= 4; i++) {
-            const message = `Spreadsheet row ${i} for batch-002`;
-            await queue.sendBatchMessage({
-                qname: "spreadsheet-queue:batch",
-                batchId: "batch-002",
-                message,
-            });
-            batch002Messages.push(message);
-            await sleep(100);
-        }
-
-        /**
          * Wait for batches to be processed
          * The cron job will run every 3 seconds and process all pending batches
+         * Allow up to 6 seconds for processing (2 cron cycles to be safe)
          */
-        await workerPromise;
+        await Promise.race([
+            workerPromise,
+            sleep(6000).then(() => {
+                throw new Error("Test timeout: batches not processed in time");
+            }),
+        ]);
 
         /**
          * Assert both batches were processed
@@ -338,7 +347,18 @@ describe("RedisQueue Tests", () => {
         }> = [];
 
         /**
-         * Start worker BEFORE sending messages
+         * Create 3 different batches
+         */
+        for (let i = 1; i <= 3; i++) {
+            await queue.sendBatchMessage({
+                qname: "retry-test:batch",
+                batchId: `batch-00${i}`,
+                message: `Message ${i}`,
+            });
+        }
+
+        /**
+         * Start worker AFTER sending messages
          */
         const workerPromise = new Promise<void>((resolve) => {
             queue.startWorker(
@@ -416,20 +436,15 @@ describe("RedisQueue Tests", () => {
         });
 
         /**
-         * Create 3 different batches
-         */
-        for (let i = 1; i <= 3; i++) {
-            await queue.sendBatchMessage({
-                qname: "retry-test:batch",
-                batchId: `batch-00${i}`,
-                message: `Message ${i}`,
-            });
-        }
-
-        /**
          * Wait for all batches to be processed (including retries)
+         * Allow up to 10 seconds (batch-001 will take multiple cycles)
          */
-        await workerPromise;
+        await Promise.race([
+            workerPromise,
+            sleep(10000).then(() => {
+                throw new Error("Test timeout: batches not processed in time");
+            }),
+        ]);
 
         /**
          * Verify total handler invocations

@@ -144,6 +144,7 @@ export class RedisQueue {
     private ns: string;
     private workers: Map<string, AbortController> = new Map();
     private batchJobs: Map<string, Cron> = new Map();
+    private isClosing = false;
 
     constructor(options: QueueOptions) {
         if ("redis" in options) {
@@ -537,6 +538,8 @@ export class RedisQueue {
      * Retries a failed message with exponential backoff
      */
     private async retryMessage(qname: string, id: string): Promise<void> {
+        if (this.isClosing) return;
+
         const key = this.getKey(qname);
         const attrs = await this.redis.hgetall(key);
 
@@ -582,6 +585,8 @@ export class RedisQueue {
      * Retries a failed batch by re-queuing it for next batch processing cycle
      */
     private async retryBatch(qname: string, batchId: string): Promise<void> {
+        if (this.isClosing) return;
+
         const key = this.getKey(qname);
         const attrs = await this.redis.hgetall(key);
 
@@ -645,6 +650,8 @@ export class RedisQueue {
         handler: (message: BatchMessage) => Promise<{ success: boolean }>,
         silent: boolean,
     ): Promise<void> {
+        if (this.isClosing) return;
+
         const pendingBatchesKey = this.getKey(qname, "pending-batches");
         const batchIds = (await this.redis.send("SMEMBERS", [
             pendingBatchesKey,
@@ -655,6 +662,8 @@ export class RedisQueue {
         }
 
         const batchPromises = batchIds.map(async (batchId) => {
+            if (this.isClosing) return;
+
             await this.redis.srem(pendingBatchesKey, batchId);
 
             const batchMessage = await this.fetchBatchMessage(qname, batchId);
@@ -718,13 +727,23 @@ export class RedisQueue {
             const every = Number(attrs.every || 60);
 
             const job = new Cron(`*/${every} * * * * *`, async () => {
-                await this.processBatches(
-                    qname,
-                    handler as (
-                        message: BatchMessage,
-                    ) => Promise<{ success: boolean }>,
-                    silent,
-                );
+                if (this.isClosing) return;
+                try {
+                    await this.processBatches(
+                        qname,
+                        handler as (
+                            message: BatchMessage,
+                        ) => Promise<{ success: boolean }>,
+                        silent,
+                    );
+                } catch (error) {
+                    if (!silent && !this.isClosing) {
+                        console.error(
+                            "Batch processing error:",
+                            (error as Error).message,
+                        );
+                    }
+                }
             });
 
             this.batchJobs.set(qname, job);
@@ -851,12 +870,30 @@ export class RedisQueue {
      * Closes all workers and the Redis connection
      */
     async close(): Promise<void> {
+        this.isClosing = true;
+
+        // Stop all workers first
         for (const qname of this.workers.keys()) {
-            this.stopWorker(qname);
+            const controller = this.workers.get(qname);
+            if (controller) {
+                controller.abort();
+            }
         }
+        this.workers.clear();
+
+        // Stop all batch jobs
         for (const qname of this.batchJobs.keys()) {
-            this.stopWorker(qname);
+            const job = this.batchJobs.get(qname);
+            if (job) {
+                job.stop();
+            }
         }
+        this.batchJobs.clear();
+
+        // Wait a bit for any pending operations to complete
+        await Bun.sleep(100);
+
+        // Close Redis connection
         this.redis.close();
     }
 }
