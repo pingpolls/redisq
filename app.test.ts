@@ -22,7 +22,7 @@ describe("RedisQueue Tests", () => {
 
         await queue.createQueue({ qname: "test-basic" });
 
-        const message = "Hello, World!";
+        const message = JSON.stringify({ id: 1, name: "John Doe" });
         let receivedCount = 0;
 
         const id = await queue.sendMessage({
@@ -61,9 +61,9 @@ describe("RedisQueue Tests", () => {
 
         const sentAt = Date.now();
         const id = await queue.sendMessage({
+            delay: delayMs,
             message,
             qname: "test-delayed",
-            delay: delayMs,
         });
 
         await new Promise<void>((resolve) => {
@@ -100,9 +100,9 @@ describe("RedisQueue Tests", () => {
         const queue = new RedisQueue(redisConfig);
 
         await queue.createQueue({
-            qname: "test-retry",
-            maxRetries: 3,
             maxBackoffSeconds: 1,
+            maxRetries: 3,
+            qname: "test-retry",
         });
 
         const message = "Retry me!";
@@ -144,9 +144,9 @@ describe("RedisQueue Tests", () => {
         const queue = new RedisQueue(redisConfig);
 
         await queue.createQueue({
-            qname: "test-delayed-retry",
-            maxRetries: 2,
             maxBackoffSeconds: 1,
+            maxRetries: 2,
+            qname: "test-delayed-retry",
         });
 
         const message = "Delayed retry message";
@@ -155,9 +155,9 @@ describe("RedisQueue Tests", () => {
 
         const sentAt = Date.now();
         await queue.sendMessage({
+            delay: delayMs,
             message,
             qname: "test-delayed-retry",
-            delay: delayMs,
         });
 
         await new Promise<void>((resolve) => {
@@ -205,9 +205,9 @@ describe("RedisQueue Tests", () => {
          * This simulates a spreadsheet-queue:batch with shorter period for testing
          */
         await queue.createQueue({
-            qname: "spreadsheet-queue:batch",
             every: 3,
             maxRetries: 0,
+            qname: "spreadsheet-queue:batch",
         });
 
         /**
@@ -235,9 +235,9 @@ describe("RedisQueue Tests", () => {
         for (let i = 1; i <= 6; i++) {
             const message = `Spreadsheet row ${i} for batch-001`;
             await queue.sendBatchMessage({
-                qname: "spreadsheet-queue:batch",
                 batchId: "batch-001",
                 message,
+                qname: "spreadsheet-queue:batch",
             });
             batch001Messages.push(message);
         }
@@ -248,9 +248,9 @@ describe("RedisQueue Tests", () => {
         for (let i = 1; i <= 4; i++) {
             const message = `Spreadsheet row ${i} for batch-002`;
             await queue.sendBatchMessage({
-                qname: "spreadsheet-queue:batch",
                 batchId: "batch-002",
                 message,
+                qname: "spreadsheet-queue:batch",
             });
             batch002Messages.push(message);
         }
@@ -334,10 +334,10 @@ describe("RedisQueue Tests", () => {
          * Create batch queue with 2-second interval and retry enabled
          */
         await queue.createQueue({
-            qname: "retry-test:batch",
             every: 2,
-            maxRetries: 3,
             maxBackoffSeconds: 1,
+            maxRetries: 3,
+            qname: "retry-test:batch",
         });
 
         const processedBatches: Array<{
@@ -351,9 +351,9 @@ describe("RedisQueue Tests", () => {
          */
         for (let i = 1; i <= 3; i++) {
             await queue.sendBatchMessage({
-                qname: "retry-test:batch",
                 batchId: `batch-00${i}`,
                 message: `Message ${i}`,
+                qname: "retry-test:batch",
             });
         }
 
@@ -365,8 +365,8 @@ describe("RedisQueue Tests", () => {
                 "retry-test:batch",
                 async (received) => {
                     processedBatches.push({
-                        batchId: received.batchId,
                         attempt: received.attempt,
+                        batchId: received.batchId,
                         success: false,
                     });
 

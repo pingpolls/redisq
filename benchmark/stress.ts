@@ -14,8 +14,8 @@ const COLORS = {
     yellow: "\x1b[33m",
 };
 
-const WORKER_COUNT = 16;
-const CONCURRENCY = 50;
+const WORKER_COUNT = 8;
+const CONCURRENCY = 2;
 const MSG_COUNT = 100_000;
 
 interface StressTestConfig {
@@ -112,7 +112,7 @@ async function testRegularQueueParallel(
     });
 
     const qname = "stress-regular";
-    await queue.createQueue({ maxRetries: 0, qname, maxsize: 150_000 });
+    await queue.createQueue({ maxRetries: 0, maxsize: 150_000, qname });
 
     const allLatencies: number[] = [];
     let receivedCount = 0;
@@ -173,7 +173,6 @@ async function testRegularQueueParallel(
 
             worker.postMessage({
                 data: {
-                    testMessage: config.testMessage,
                     messagesPerWorker,
                     qname,
                     redisConfig: {
@@ -181,6 +180,7 @@ async function testRegularQueueParallel(
                         namespace: "stress-test",
                         port: process.env.REDIS_PORT || "6379",
                     },
+                    testMessage: config.testMessage,
                     workerIndex: i,
                 },
                 type: "start",
@@ -284,6 +284,8 @@ async function main() {
             test1Results,
         );
 
+        await cleanup();
+
         // Test 2: Medium messages
         log("cyan", "\n📋 Test 2: Medium messages (1KB)");
         const test2Results = await testRegularQueueParallel({
@@ -293,6 +295,8 @@ async function main() {
             workerCount: WORKER_COUNT,
         });
         printResults("Test 2: Medium Messages (50K msgs, 1KB)", test2Results);
+
+        await cleanup();
 
         // Test 3: Large messages
         log("cyan", "\n📋 Test 3: Large messages (10KB)");
