@@ -357,7 +357,6 @@ export class RedisQueue {
         return JSON.parse(encoded);
     }
 
-    // OPTIMIZED: Batch fetch multiple messages at once
     private async fetchMessages(
         qname: string,
         ids: string[],
@@ -666,7 +665,6 @@ export class RedisQueue {
         }
     }
 
-    // OPTIMIZED: Process messages in parallel within worker
     private async runWorker(
         qname: string,
         handler: (message: Message) => Promise<{ success: boolean }>,
@@ -675,14 +673,13 @@ export class RedisQueue {
         silent: boolean,
     ): Promise<void> {
         const queueKey = this.getKey(qname, "queue");
-        const BATCH_SIZE = 50; // How many messages to fetch at once
+        const BATCH_SIZE = 50;
 
         while (!signal.aborted) {
             try {
                 await this.processDelayedMessages(qname);
 
-                // Pop multiple message IDs at once
-                const ids = await this.redis.lpop(queueKey, BATCH_SIZE);
+                const ids = await this.redis.rpop(queueKey, BATCH_SIZE);
 
                 if (ids && ids.length > 0) {
                     const messages = await this.fetchMessages(
@@ -690,7 +687,6 @@ export class RedisQueue {
                         ids as string[],
                     );
 
-                    // Process them in parallel
                     const processingPromises = messages.map((message) =>
                         handler(message)
                             .then(async ({ success }) => {
@@ -712,7 +708,6 @@ export class RedisQueue {
                     );
                     await Promise.all(processingPromises);
                 } else {
-                    // If no messages, wait a bit before trying again to avoid busy-looping
                     await Bun.sleep(50);
                 }
             } catch (error) {

@@ -506,8 +506,8 @@ describe("RedisQueue Tests", () => {
         await queue.close();
     });
 
-    test.only("7. Can handle high volume and concurrency", async () => {
-        const totalMessages = 10;
+    test("7. Can handle high volume and concurrency", async () => {
+        const totalMessages = 10_000;
 
         const queue = new RedisQueue(redisConfig);
 
@@ -516,7 +516,6 @@ describe("RedisQueue Tests", () => {
         const processedIds: string[] = [];
 
         Array.from({ length: totalMessages }, async (_, i) => {
-            console.log(`Sending message ${i}`);
             await queue.sendMessage({
                 message: JSON.stringify({
                     id: `${i}`,
@@ -542,8 +541,6 @@ describe("RedisQueue Tests", () => {
                 workerConfig,
             );
         });
-
-        console.info(processedIds);
 
         for (let i = 0; i < totalMessages; i++) {
             expect(processedIds[i]).toBe(`${i}`);
