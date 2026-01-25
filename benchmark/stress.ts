@@ -18,7 +18,7 @@ const COLORS = {
 };
 
 const WORKER_COUNT = 8;
-const CONCURRENCY = 4;
+const CONCURRENCY = 2;
 const MSG_COUNT = 100_000;
 
 interface StressTestConfig {
@@ -295,7 +295,6 @@ async function main() {
 
         await cleanup();
 
-        // Test 3: Medium messages
         log("cyan", "\n📋 Test 3: Medium messages (10KB)");
         const test3Results = await testRegularQueueParallel({
             concurrency: CONCURRENCY,
@@ -307,12 +306,25 @@ async function main() {
 
         await cleanup();
 
+        // Calculate combined averages
+        const avgThroughput =
+            (test1Results.throughput +
+                test2Results.throughput +
+                test3Results.throughput) /
+            3;
+        const avgP50 =
+            (test1Results.p50 + test2Results.p50 + test3Results.p50) / 3;
+        const avgP95 =
+            (test1Results.p95 + test2Results.p95 + test3Results.p95) / 3;
+        const avgP99 =
+            (test1Results.p99 + test2Results.p99 + test3Results.p99) / 3;
+
         // Summary
         log("bright", `\n${"=".repeat(60)}`);
         log("magenta", "  📈 BENCHMARK SUMMARY");
         log("bright", "=".repeat(60));
 
-        console.log("\n  Queue Performance:");
+        console.log("\n  Individual Queue Performance:");
         console.log(
             `    - Tiny messages (100B):   ${test1Results.throughput.toFixed(0)} msg/s (p50: ${test1Results.p50.toFixed(2)}ms)`,
         );
@@ -329,25 +341,16 @@ async function main() {
 
         log(
             "yellow",
-            "\n💡 To update README.md Performance section, use these values:",
+            "\n💡 To update README.md Performance section, use these values (averaged across all tests):",
         );
         console.log("\n  Overall:");
         log(
             "cyan",
-            `   - **Throughput**: ~${Math.round(test1Results.throughput).toLocaleString()} messages/second`,
+            `   - **Throughput**: ~${Math.round(avgThroughput).toLocaleString()} messages/second`,
         );
-        log(
-            "cyan",
-            `   - **Latency (p50)**: ${test1Results.p50.toFixed(2)} ms`,
-        );
-        log(
-            "cyan",
-            `   - **Latency (p95)**: ${test1Results.p95.toFixed(2)} ms`,
-        );
-        log(
-            "cyan",
-            `   - **Latency (p99)**: ${test1Results.p99.toFixed(2)} ms`,
-        );
+        log("cyan", `   - **Latency (p50)**: ${avgP50.toFixed(2)} ms`);
+        log("cyan", `   - **Latency (p95)**: ${avgP95.toFixed(2)} ms`);
+        log("cyan", `   - **Latency (p99)**: ${avgP99.toFixed(2)} ms`);
     } catch (error) {
         log(
             "red",

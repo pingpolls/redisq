@@ -757,22 +757,24 @@ Run the stress test to benchmark on your hardware:
 bun stress
 ```
 
-📈 BENCHMARK SUMMARY
+Individual Queue Performance:
+  - **Tiny messages (100B)**:   47181 msg/s (p50: 49.97ms)
+  - **Small messages (1KB)**:   33709 msg/s (p50: 69.05ms)
+  - **Medium messages (10KB)**:  4056 msg/s (p50: 261.32ms)
+  
+Overall:
+  - **Throughput**: ~28,315 messages/second
+  - **Latency (p50)**: 126.78 ms
+  - **Latency (p95)**: 299.27 ms
+  - **Latency (p99)**: 383.86 ms
 
-Regular Queue Performance:
-- Small messages (100B):   46943 msg/s (p50: 53.72ms)
-- Medium messages (1KB):   34260 msg/s (p50: 81.21ms)
-- Large messages (10KB):  4533 msg/s (p50: 253.26ms)
-
-✅ All stress tests completed successfully!
-
-💡 To update README.md Performance section, use these values:
-   - **Throughput**: ~46,943 messages/second
-   - **Latency (p50)**: 53.72 ms
-   - **Latency (p95)**: 69.70 ms
-   - **Latency (p99)**: 75.17 ms
+Tested on Dockerized `redis:alpine` through WSL2 with 1 CPU and 1GB instance.
 
 *Results may vary based on hardware, Redis configuration, and network conditions.*
+
+## Contributing
+
+Check our github repository [here](https://github.com/pingpolls/redisq).
 
 ## License
 
