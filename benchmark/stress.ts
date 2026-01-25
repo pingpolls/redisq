@@ -320,7 +320,7 @@ async function main() {
             `    - Medium messages (1KB):   ${test2Results.throughput.toFixed(0)} msg/s (p50: ${test2Results.p50.toFixed(2)}ms)`,
         );
         console.log(
-            `    - Large messages (100KB):  ${test3Results.throughput.toFixed(0)} msg/s (p50: ${test3Results.p50.toFixed(2)}ms)`,
+            `    - Large messages (10KB):  ${test3Results.throughput.toFixed(0)} msg/s (p50: ${test3Results.p50.toFixed(2)}ms)`,
         );
 
         log("bright", `\n${"=".repeat(60)}`);

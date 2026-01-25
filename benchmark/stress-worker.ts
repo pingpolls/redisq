@@ -24,15 +24,27 @@ self.addEventListener("message", async (event: MessageEvent<WorkerMessage>) => {
         try {
             const queue = new RedisQueue(redisConfig);
             const latencies: number[] = [];
+            const CHUNK_SIZE = 1000;
 
-            for (let i = 0; i < messagesPerWorker; i++) {
-                const start = performance.now();
-                await queue.sendMessage({
-                    message: testMessage,
-                    qname,
-                });
-                const latency = performance.now() - start;
-                latencies.push(latency);
+            for (let i = 0; i < messagesPerWorker; i += CHUNK_SIZE) {
+                const promises = [];
+                const chunkEnd = Math.min(i + CHUNK_SIZE, messagesPerWorker);
+
+                for (let j = i; j < chunkEnd; j++) {
+                    const start = performance.now();
+                    promises.push(
+                        queue
+                            .sendMessage({
+                                message: testMessage,
+                                qname,
+                            })
+                            .then(() => {
+                                const latency = performance.now() - start;
+                                latencies.push(latency);
+                            }),
+                    );
+                }
+                await Promise.all(promises);
             }
 
             await queue.close();
