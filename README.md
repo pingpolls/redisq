@@ -26,10 +26,10 @@ bun install @pingpolls/redisq
 ## Quick Start
 
 ```typescript
-import RedisQueue from '@pingpolls/redisq';
+import { RedisQ } from '@pingpolls/redisq';
 
 // Initialize the queue
-const queue = new RedisQueue({
+const queue = new RedisQ({
   host: '127.0.0.1',
   port: '6379',
   namespace: 'myapp'
@@ -73,9 +73,9 @@ Batch queues (suffix `:batch`) collect messages over a time period and process t
 Create a queue service in `src/lib/server/queue.ts`:
 
 ```typescript
-import RedisQueue from '@pingpolls/redisq';
+import { RedisQ } from '@pingpolls/redisq';
 
-export const queue = new RedisQueue({
+export const queue = new RedisQ({
   host: import.meta.env.REDIS_HOST || '127.0.0.1',
   port: import.meta.env.REDIS_PORT || '6379',
   namespace: 'sveltekit-app'
@@ -163,9 +163,9 @@ export async function load() {
 Create queue in `lib/queue.ts`:
 
 ```typescript
-import RedisQueue from '@pingpolls/redisq';
+import { RedisQ } from '@pingpolls/redisq';
 
-export const queue = new RedisQueue({
+export const queue = new RedisQ({
   host: process.env.REDIS_HOST!,
   port: process.env.REDIS_PORT!,
   namespace: 'nextjs-app'
@@ -217,10 +217,10 @@ export async function POST(request: Request) {
 Create queue plugin in `server/plugins/queue.ts`:
 
 ```typescript
-import RedisQueue from '@pingpolls/redisq';
+import { RedisQ } from '@pingpolls/redisq';
 
 export default defineNitroPlugin(async (nitroApp) => {
-  const queue = new RedisQueue({
+  const queue = new RedisQ({
     host: process.env.REDIS_HOST || '127.0.0.1',
     port: process.env.REDIS_PORT || '6379',
     namespace: 'nuxt-app'
@@ -260,11 +260,11 @@ export default defineEventHandler(async (event) => {
 
 ```typescript
 import { Hono } from 'hono';
-import RedisQueue from '@pingpolls/redisq';
+import { RedisQ } from '@pingpolls/redisq';
 
 const app = new Hono();
 
-const queue = new RedisQueue({
+const queue = new RedisQ({
   host: '127.0.0.1',
   port: '6379',
   namespace: 'hono-app'
@@ -329,7 +329,7 @@ export default app;
 ### Constructor
 
 ```typescript
-new RedisQueue(options: QueueOptions)
+new RedisQ(options: QueueOptions)
 ```
 
 **Options:**
@@ -586,11 +586,11 @@ REDIS_TLS=false
 
 ```typescript
 import { describe, test, expect } from 'bun:test';
-import RedisQueue from '@pingpolls/redisq';
+import { RedisQ } from '@pingpolls/redisq';
 
 describe('Queue Tests', () => {
   test('processes messages', async () => {
-    const queue = new RedisQueue({ host: '127.0.0.1', port: '6379' });
+    const queue = new RedisQ({ host: '127.0.0.1', port: '6379' });
     
     await queue.createQueue({ qname: 'test' });
     
@@ -621,16 +621,16 @@ Run the stress test to benchmark on your hardware:
 bun stress
 ```
 
-Individual Queue Performance:
-  - **Tiny messages (100B)**:   47181 msg/s (p50: 49.97ms)
-  - **Small messages (1KB)**:   33709 msg/s (p50: 69.05ms)
-  - **Medium messages (10KB)**:  4056 msg/s (p50: 261.32ms)
-  
-Overall:
-  - **Throughput**: ~28,315 messages/second
-  - **Latency (p50)**: 126.78 ms
-  - **Latency (p95)**: 299.27 ms
-  - **Latency (p99)**: 383.86 ms
+✅ Individual Queue Performance:
+  - **Tiny messages (100B)**:   49,302 msg/s (p50: 49.75ms)
+  - **Small messages (1KB)**:   35,061 msg/s (p50: 74.34ms)
+  - **Medium messages (10KB)**:  9,437 msg/s (p50: 213.58ms)
+
+💡 Overall (Averaged across all tests):
+  - **Throughput**: ~31,267 messages/second
+  - **Latency (p50)**: 112.56 ms
+  - **Latency (p95)**: 312.11 ms
+  - **Latency (p99)**: 676.23 ms
 
 Tested on Dockerized `redis:alpine` through WSL2 with 1 CPU and 1GB instance.
 

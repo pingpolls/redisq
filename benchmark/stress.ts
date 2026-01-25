@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import type { Worker } from "bun";
-import RedisQueue from "../app";
+import { RedisQ } from "../app";
 import mediumMsg from "./medium.txt";
 import smallMsg from "./small.txt";
 import tinyMsg from "./tiny.txt";
@@ -108,7 +108,7 @@ function printResults(testName: string, results: TestResults) {
 async function testRegularQueueParallel(
     config: StressTestConfig,
 ): Promise<TestResults> {
-    const queue = new RedisQueue({
+    const queue = new RedisQ({
         host: process.env.REDIS_HOST || "127.0.0.1",
         namespace: "stress-test",
         port: process.env.REDIS_PORT || "6379",

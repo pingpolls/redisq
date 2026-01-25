@@ -79,7 +79,7 @@ interface StoredBatchMeta {
     attempt: number;
 }
 
-export class RedisQueue {
+export class RedisQ {
     private redis: BunRedisClient;
     private redisUrl: string;
     private ns: string;
@@ -766,4 +766,4 @@ export class RedisQueue {
     }
 }
 
-export default RedisQueue;
+export default { RedisQ };

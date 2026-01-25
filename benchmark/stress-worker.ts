@@ -1,4 +1,5 @@
-import RedisQueue from "../app";
+import { RedisQ } from "../app";
+
 declare var self: Worker;
 
 interface WorkerMessage {
@@ -22,7 +23,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerMessage>) => {
             event.data.data;
 
         try {
-            const queue = new RedisQueue(redisConfig);
+            const queue = new RedisQ(redisConfig);
             const latencies: number[] = [];
             const CHUNK_SIZE = 1000;
 

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import RedisQueue from "./app";
+import { RedisQ } from "./app";
 
 const redisConfig = {
     host: process.env.REDIS_HOST || "127.0.0.1",
@@ -16,9 +16,9 @@ const workerConfig = {
  */
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("RedisQueue Tests", () => {
+describe("RedisQ Tests", () => {
     test("1. Can send and receive single message", async () => {
-        const queue = new RedisQueue(redisConfig);
+        const queue = new RedisQ(redisConfig);
 
         await queue.createQueue({ qname: "test-basic" });
 
@@ -51,7 +51,7 @@ describe("RedisQueue Tests", () => {
     });
 
     test("2. Can send and receive delayed message", async () => {
-        const queue = new RedisQueue(redisConfig);
+        const queue = new RedisQ(redisConfig);
 
         await queue.createQueue({ qname: "test-delayed" });
 
@@ -97,7 +97,7 @@ describe("RedisQueue Tests", () => {
     });
 
     test("3. Can retry send and receive single message", async () => {
-        const queue = new RedisQueue(redisConfig);
+        const queue = new RedisQ(redisConfig);
 
         await queue.createQueue({
             maxBackoffSeconds: 1,
@@ -141,7 +141,7 @@ describe("RedisQueue Tests", () => {
     });
 
     test("4. Can retry send and receive delayed message", async () => {
-        const queue = new RedisQueue(redisConfig);
+        const queue = new RedisQ(redisConfig);
 
         await queue.createQueue({
             maxBackoffSeconds: 1,
@@ -198,7 +198,7 @@ describe("RedisQueue Tests", () => {
     });
 
     test("5. Can send and receive batched messages (multiple batches in same period)", async () => {
-        const queue = new RedisQueue(redisConfig);
+        const queue = new RedisQ(redisConfig);
 
         /**
          * Create batch queue with 3-second interval
@@ -328,7 +328,7 @@ describe("RedisQueue Tests", () => {
     });
 
     test("6. Can send and receive batched messages with selective retry", async () => {
-        const queue = new RedisQueue(redisConfig);
+        const queue = new RedisQ(redisConfig);
 
         /**
          * Create batch queue with 2-second interval and retry enabled
@@ -509,7 +509,7 @@ describe("RedisQueue Tests", () => {
     test("7. Can handle high volume and concurrency", async () => {
         const totalMessages = 10_000;
 
-        const queue = new RedisQueue(redisConfig);
+        const queue = new RedisQ(redisConfig);
 
         await queue.createQueue({ qname: "test-concurrency" });
 
