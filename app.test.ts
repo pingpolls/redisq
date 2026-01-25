@@ -505,6 +505,54 @@ describe("RedisQueue Tests", () => {
 
         await queue.close();
     });
+
+    test.only("7. Can handle high volume and concurrency", async () => {
+        const totalMessages = 10;
+
+        const queue = new RedisQueue(redisConfig);
+
+        await queue.createQueue({ qname: "test-concurrency" });
+
+        const processedIds: string[] = [];
+
+        Array.from({ length: totalMessages }, async (_, i) => {
+            console.log(`Sending message ${i}`);
+            await queue.sendMessage({
+                message: JSON.stringify({
+                    id: `${i}`,
+                    name: `John Doe ${i}`,
+                }),
+                qname: "test-concurrency",
+            });
+        });
+
+        let receivedCount = 0;
+
+        await new Promise<void>((resolve) => {
+            queue.startWorker(
+                "test-concurrency",
+                async (received) => {
+                    receivedCount++;
+                    processedIds.push(JSON.parse(received.message).id);
+                    if (receivedCount === totalMessages) {
+                        resolve();
+                    }
+                    return { success: true };
+                },
+                workerConfig,
+            );
+        });
+
+        console.info(processedIds);
+
+        for (let i = 0; i < totalMessages; i++) {
+            expect(processedIds[i]).toBe(`${i}`);
+        }
+
+        expect(receivedCount).toBe(totalMessages);
+
+        await queue.close();
+    });
 });
 
 afterAll(async () => {

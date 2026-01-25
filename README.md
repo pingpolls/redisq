@@ -757,11 +757,20 @@ Run the stress test to benchmark on your hardware:
 bun stress
 ```
 
-Expected results on limited 2CPU 2GB Dockerized WSL2 with:
-- **Throughput**: ~9,688 messages/second
-- **Latency** (p50): 1.56 ms
-- **Latency** (p95): 2.47 ms
-- **Latency** (p99): 2.96 ms
+📈 BENCHMARK SUMMARY
+
+Regular Queue Performance:
+- Small messages (100B):   46943 msg/s (p50: 53.72ms)
+- Medium messages (1KB):   34260 msg/s (p50: 81.21ms)
+- Large messages (10KB):  4533 msg/s (p50: 253.26ms)
+
+✅ All stress tests completed successfully!
+
+💡 To update README.md Performance section, use these values:
+   - **Throughput**: ~46,943 messages/second
+   - **Latency (p50)**: 53.72 ms
+   - **Latency (p95)**: 69.70 ms
+   - **Latency (p99)**: 75.17 ms
 
 *Results may vary based on hardware, Redis configuration, and network conditions.*
 
