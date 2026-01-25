@@ -200,14 +200,25 @@ export class RedisQueue {
 
     async deleteQueue(qname: string): Promise<boolean> {
         const pattern = `${this.ns}:${qname}*`;
-        const keys = await this.redis.keys(pattern);
+        let cursor = "0";
+        let keysFound = false;
 
-        if (keys.length === 0) {
-            return false;
-        }
+        do {
+            const [nextCursor, keys] = await this.redis.scan(
+                cursor,
+                "MATCH",
+                pattern,
+                "COUNT",
+                500,
+            );
+            cursor = nextCursor as string;
+            if (keys.length > 0) {
+                keysFound = true;
+                await this.redis.del(...keys);
+            }
+        } while (cursor !== "0");
 
-        await this.redis.del(...keys);
-        return true;
+        return keysFound;
     }
 
     async sendMessage(options: SendMessageOptions): Promise<string> {
@@ -295,10 +306,11 @@ export class RedisQueue {
         const batchKey = this.getKey(qname, `batch:${batchId}`);
         const batchMetaKey = this.getKey(qname, "batch-meta");
 
-        await this.redis.hset(messagesKey, { [id]: encoded });
-        await this.redis.sadd(batchKey, id);
-
-        const batchExists = await this.redis.hexists(batchMetaKey, batchId);
+        const [_, __, batchExists] = await Promise.all([
+            this.redis.hset(messagesKey, { [id]: encoded }),
+            this.redis.sadd(batchKey, id),
+            this.redis.hexists(batchMetaKey, batchId),
+        ]);
 
         if (!batchExists) {
             const batchMeta: StoredBatchMeta = {
@@ -343,26 +355,6 @@ export class RedisQueue {
 
     private decodeBatchMeta(encoded: string): StoredBatchMeta {
         return JSON.parse(encoded);
-    }
-
-    private async fetchMessage(
-        qname: string,
-        id: string,
-    ): Promise<Message | null> {
-        const messagesKey = this.getKey(qname, "messages");
-        const encoded = await this.redis.hget(messagesKey, id);
-
-        if (!encoded) {
-            return null;
-        }
-
-        const stored = this.decodeMessage(encoded);
-        return {
-            attempt: stored.attempt,
-            id: stored.id,
-            message: stored.message,
-            sent: stored.sent,
-        };
     }
 
     // OPTIMIZED: Batch fetch multiple messages at once
@@ -683,22 +675,23 @@ export class RedisQueue {
         silent: boolean,
     ): Promise<void> {
         const queueKey = this.getKey(qname, "queue");
+        const BATCH_SIZE = 50; // How many messages to fetch at once
 
         while (!signal.aborted) {
             try {
                 await this.processDelayedMessages(qname);
 
-                const result = await this.redis.send("BRPOP", [
-                    queueKey,
-                    "0.1",
-                ]);
+                // Pop multiple message IDs at once
+                const ids = await this.redis.lpop(queueKey, BATCH_SIZE);
 
-                if (result && Array.isArray(result) && result.length >= 2) {
-                    const id = result[1] as string;
-                    const message = await this.fetchMessage(qname, id);
+                if (ids && ids.length > 0) {
+                    const messages = await this.fetchMessages(
+                        qname,
+                        ids as string[],
+                    );
 
-                    if (message) {
-                        // Process message without blocking the loop
+                    // Process them in parallel
+                    const processingPromises = messages.map((message) =>
                         handler(message)
                             .then(async ({ success }) => {
                                 if (success) {
@@ -715,8 +708,12 @@ export class RedisQueue {
                                     );
                                 }
                                 await this.retryMessage(qname, message.id);
-                            });
-                    }
+                            }),
+                    );
+                    await Promise.all(processingPromises);
+                } else {
+                    // If no messages, wait a bit before trying again to avoid busy-looping
+                    await Bun.sleep(50);
                 }
             } catch (error) {
                 if (!signal.aborted) {

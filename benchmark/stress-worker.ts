@@ -1,4 +1,5 @@
 import RedisQueue from "../app";
+declare var self: Worker;
 
 interface WorkerMessage {
     type: "start";

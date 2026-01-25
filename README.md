@@ -758,10 +758,10 @@ bun stress
 ```
 
 Expected results on limited 2CPU 2GB Dockerized WSL2 with:
-- **Throughput**: ~7,010 messages/second
-- **Latency (p50)**: 1.45 ms
-- **Latency (p95)**: 3.94 ms
-- **Latency (p99)**: 7.83 ms
+- **Throughput**: ~9,688 messages/second
+- **Latency** (p50): 1.56 ms
+- **Latency** (p95): 2.47 ms
+- **Latency** (p99): 2.96 ms
 
 *Results may vary based on hardware, Redis configuration, and network conditions.*
 
