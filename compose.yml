@@ -12,6 +12,11 @@ services:
       - redis-net
     ports:
       - 6379:6379
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: "1G"
 volumes:
   redisvol:
     driver: local
