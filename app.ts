@@ -550,7 +550,7 @@ export class RedisQueue {
 
     private async processBatches(
         qname: string,
-        handler: (message: BatchMessage) => Promise<{ success: boolean }>,
+        handler: (batch: BatchMessage) => Promise<{ success: boolean }>,
         silent: boolean,
     ): Promise<void> {
         if (this.isClosing) return;
@@ -600,7 +600,7 @@ export class RedisQueue {
     async startWorker<QueueName extends `${string}:batch` | (string & {})>(
         qname: QueueName,
         handler: (
-            message: QueueName extends `${string}:batch`
+            received: QueueName extends `${string}:batch`
                 ? BatchMessage
                 : Message,
         ) => Promise<{ success: boolean }>,
@@ -630,7 +630,7 @@ export class RedisQueue {
                     await this.processBatches(
                         qname,
                         handler as (
-                            message: BatchMessage,
+                            received: BatchMessage,
                         ) => Promise<{ success: boolean }>,
                         silent,
                     );
@@ -653,7 +653,7 @@ export class RedisQueue {
                 this.runWorker(
                     qname,
                     handler as (
-                        message: Message,
+                        received: Message,
                     ) => Promise<{ success: boolean }>,
                     controller.signal,
                     i,
@@ -667,7 +667,7 @@ export class RedisQueue {
 
     private async runWorker(
         qname: string,
-        handler: (message: Message) => Promise<{ success: boolean }>,
+        handler: (received: Message) => Promise<{ success: boolean }>,
         signal: AbortSignal,
         workerId: number,
         silent: boolean,
@@ -687,13 +687,16 @@ export class RedisQueue {
                         ids as string[],
                     );
 
-                    const processingPromises = messages.map((message) =>
-                        handler(message)
+                    const processingPromises = messages.map((received) =>
+                        handler(received)
                             .then(async ({ success }) => {
                                 if (success) {
-                                    await this.deleteMessage(qname, message.id);
+                                    await this.deleteMessage(
+                                        qname,
+                                        received.id,
+                                    );
                                 } else {
-                                    await this.retryMessage(qname, message.id);
+                                    await this.retryMessage(qname, received.id);
                                 }
                             })
                             .catch(async (error) => {
@@ -703,7 +706,7 @@ export class RedisQueue {
                                         (error as Error).message,
                                     );
                                 }
-                                await this.retryMessage(qname, message.id);
+                                await this.retryMessage(qname, received.id);
                             }),
                     );
                     await Promise.all(processingPromises);

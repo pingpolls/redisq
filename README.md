@@ -45,8 +45,8 @@ await queue.sendMessage({
 });
 
 // Start a worker to process messages
-await queue.startWorker('emails', async (message) => {
-  const email = JSON.parse(message.message);
+await queue.startWorker('emails', async (received) => {
+  const email = JSON.parse(received.message);
   console.log(`Sending email to ${email.to}`);
   
   // Process your message here
@@ -69,8 +69,6 @@ Batch queues (suffix `:batch`) collect messages over a time period and process t
 ## Usage Examples
 
 ### SvelteKit
-
-#### Option 1: Direct Import (Recommended for Simple Apps)
 
 Create a queue service in `src/lib/server/queue.ts`:
 
@@ -102,8 +100,8 @@ import { queue, initQueues } from '$lib/server/queue';
 await initQueues();
 
 // Start email worker
-queue.startWorker('emails', async (message) => {
-  const data = JSON.parse(message.message);
+queue.startWorker('emails', async (received) => {
+  const data = JSON.parse(received.message);
   await sendEmail(data);
   return { success: true };
 }, { silent: false });
@@ -160,140 +158,6 @@ export async function load() {
 }
 ```
 
-#### Option 2: Using event.locals (Recommended for Larger Apps)
-
-This approach provides better dependency injection and testing capabilities with SvelteKit 5.
-
-Create the queue service in `src/lib/server/queue.ts`:
-
-```typescript
-import RedisQueue from '@pingpolls/redisq';
-
-export function createQueue() {
-  return new RedisQueue({
-    host: import.meta.env.REDIS_HOST || '127.0.0.1',
-    port: import.meta.env.REDIS_PORT || '6379',
-    namespace: 'sveltekit-app'
-  });
-}
-
-export async function initQueues(queue: RedisQueue) {
-  await queue.createQueue({ qname: 'emails', maxRetries: 3 });
-  await queue.createQueue({ 
-    qname: 'analytics:batch', 
-    every: 60,
-    maxRetries: 2 
-  });
-}
-```
-
-Setup in `src/hooks.server.ts`:
-
-```typescript
-import type { Handle } from '@sveltejs/kit';
-import { createQueue, initQueues } from '$lib/server/queue';
-
-// Create single queue instance
-const queue = createQueue();
-await initQueues(queue);
-
-// Start workers
-queue.startWorker('emails', async (message) => {
-  const data = JSON.parse(message.message);
-  await sendEmail(data);
-  return { success: true };
-});
-
-queue.startWorker('analytics:batch', async (batch) => {
-  await saveToDB(batch.messages);
-  return { success: true };
-});
-
-export const handle: Handle = async ({ event, resolve }) => {
-  // Attach queue to event.locals
-  event.locals.queue = queue;
-  
-  return resolve(event);
-};
-```
-
-Add TypeScript types in `src/app.d.ts`:
-
-```typescript
-import type RedisQueue from '@pingpolls/redisq';
-
-declare global {
-  namespace App {
-    interface Locals {
-      queue: RedisQueue;
-    }
-  }
-}
-
-export {};
-```
-
-Now use `event.locals.queue` in your routes:
-
-```typescript
-// src/routes/api/signup/+server.ts
-import { json } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
-
-export const POST: RequestHandler = async ({ request, locals }) => {
-  const { email, name } = await request.json();
-  
-  // Access queue from locals
-  await locals.queue.sendMessage({
-    qname: 'emails',
-    message: JSON.stringify({ to: email, template: 'welcome', name })
-  });
-  
-  await locals.queue.sendBatchMessage({
-    qname: 'analytics:batch',
-    batchId: 'signups',
-    message: JSON.stringify({ event: 'signup', email, timestamp: Date.now() })
-  });
-  
-  return json({ success: true });
-};
-```
-
-```typescript
-// src/routes/orders/[id]/+page.server.ts
-import type { PageServerLoad, Actions } from './$types';
-
-export const load: PageServerLoad = async ({ params, locals }) => {
-  // Queue background task
-  await locals.queue.sendMessage({
-    qname: 'emails',
-    message: JSON.stringify({ type: 'order-confirmation', orderId: params.id })
-  });
-  
-  return {
-    orderId: params.id
-  };
-};
-
-export const actions: Actions = {
-  cancel: async ({ params, locals }) => {
-    await locals.queue.sendMessage({
-      qname: 'emails',
-      message: JSON.stringify({ type: 'order-cancellation', orderId: params.id })
-    });
-    
-    return { success: true };
-  }
-};
-```
-
-**Benefits of using `event.locals`:**
-- Single queue instance across your app
-- Better for dependency injection and testing
-- Cleaner imports in routes
-- Type-safe access with TypeScript
-- Follows SvelteKit 5 best practices
-
 ### Next.js (App Router)
 
 Create queue in `lib/queue.ts`:
@@ -317,8 +181,8 @@ import { queue } from '@/lib/queue';
 await queue.createQueue({ qname: 'notifications', maxRetries: 3 });
 
 // Start worker
-queue.startWorker('notifications', async (message) => {
-  const notification = JSON.parse(message.message);
+queue.startWorker('notifications', async (received) => {
+  const notification = JSON.parse(received.message);
   await sendPushNotification(notification);
   return { success: true };
 });
@@ -365,8 +229,8 @@ export default defineNitroPlugin(async (nitroApp) => {
   await queue.createQueue({ qname: 'tasks', maxRetries: 3 });
 
   // Start worker
-  queue.startWorker('tasks', async (message) => {
-    const task = JSON.parse(message.message);
+  queue.startWorker('tasks', async (received) => {
+    const task = JSON.parse(received.message);
     await processTask(task);
     return { success: true };
   });
@@ -415,8 +279,8 @@ await queue.createQueue({
 });
 
 // Start regular queue worker
-queue.startWorker('webhooks', async (message) => {
-  const webhook = JSON.parse(message.message);
+queue.startWorker('webhooks', async (received) => {
+  const webhook = JSON.parse(received.message);
   await fetch(webhook.url, {
     method: 'POST',
     body: JSON.stringify(webhook.data),
@@ -543,11 +407,11 @@ Starts a worker to process messages.
 
 ```typescript
 // Regular queue worker
-await queue.startWorker('my-queue', async (message) => {
-  console.log(message.id);
-  console.log(message.message);
-  console.log(message.attempt);
-  console.log(message.sent);
+await queue.startWorker('my-queue', async (received) => {
+  console.log(received.id);
+  console.log(received.message);
+  console.log(received.attempt);
+  console.log(received.sent);
   
   return { success: true }; // or { success: false } to retry
 }, {
