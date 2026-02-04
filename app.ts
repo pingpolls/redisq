@@ -765,5 +765,3 @@ export class RedisQ {
         this.redis.close();
     }
 }
-
-export default { RedisQ };
