@@ -1,68 +1,157 @@
 import { RedisClient as BunRedisClient } from "bun";
 import { Cron } from "croner";
 
+/**
+ * Options for initializing the RedisQ client.
+ * You can either provide a Redis client instance or connection details.
+ */
 export type QueueOptions =
     | {
+          /** A Bun Redis client instance. */
           redis: BunRedisClient;
       }
     | {
+          /** Redis server host. */
           host: string;
+          /** Redis server port. */
           port: string;
+          /** Redis server user. */
           user?: string;
+          /** Redis server password. */
           password?: string;
+          /** Namespace for all Redis keys. */
           namespace?: string;
+          /** Whether to use TLS for the connection. */
           tls?: boolean;
       };
 
+/**
+ * Options for creating a new queue.
+ * The options are different for regular and batch queues.
+ */
 export type CreateQueueOptions<QueueName extends string = string> =
     QueueName extends `${string}:batch`
         ? {
+              /**
+               * The name of the queue. Must end with `:batch` for batch queues.
+               * @example "my-queue:batch"
+               */
               qname: QueueName;
+              /** Maximum message size in bytes.
+               * @default 65536
+               */
               maxsize?: number;
+              /**
+               * Maximum number of retries for a message.
+               * `0` = no retry, `-1` = unlimited, `n` = max retries.
+               * @default 0
+               */
               maxRetries?: number;
+              /**
+               * Maximum backoff time in seconds for exponential backoff.
+               * @default 30
+               */
               maxBackoffSeconds?: number;
+              /**
+               * Batch processing interval in seconds.
+               * @default 60
+               */
               every?: number;
           }
         : {
+              /**
+               * The name of the queue.
+               * @example "my-queue"
+               */
               qname: QueueName;
+              /** Maximum message size in bytes.
+               * @default 65536
+               */
               maxsize?: number;
+              /**
+               * Maximum number of retries for a message.
+               * `0` = no retry, `-1` = unlimited, `n` = max retries.
+               * @default 0
+               */
               maxRetries?: number;
+              /**
+               * Maximum backoff time in seconds for exponential backoff.
+               * @default 30
+               */
               maxBackoffSeconds?: number;
           };
 
+/**
+ * Attributes of a queue.
+ */
 export interface QueueAttributes {
+    /** Maximum message size in bytes. */
     maxsize: number;
+    /** Timestamp when the queue was created. */
     created: number;
+    /** Number of pending messages in the queue. */
     msgs: number;
+    /** Whether the queue is a batch queue. */
     isBatch: boolean;
+    /** Maximum number of retries for a message. */
     maxRetries: number;
+    /** Maximum backoff time in seconds for exponential backoff. */
     maxBackoffSeconds: number;
+    /** Batch processing interval in seconds (for batch queues only). */
     every?: number;
 }
 
+/**
+ * Options for sending a message to a regular queue.
+ */
 export interface SendMessageOptions {
+    /** The name of the queue. */
     qname: string;
+    /** The message content. */
     message: string;
+    /** Optional delay in milliseconds before the message is processed. */
     delay?: number;
 }
 
+/**
+ * Options for sending a message to a batch queue.
+ */
 export interface SendBatchMessageOptions {
+    /** The name of the batch queue. */
     qname: string;
+    /**
+     * The ID of the batch. Messages with the same `batchId` are processed together.
+     */
     batchId: string;
+    /** The message content. */
     message: string;
 }
 
+/**
+ * A message received from a regular queue.
+ */
 export interface Message {
+    /** The unique ID of the message. */
     id: string;
+    /** The message content. */
     message: string;
+    /** Timestamp when the message was sent. */
     sent: number;
+    /** The current attempt number (1-based). */
     attempt: number;
 }
 
+/**
+ * A batch of messages received from a batch queue.
+ */
 export interface BatchMessage {
+    /** The ID of the batch. */
     batchId: string;
+    /** Array of messages in the batch. */
     messages: Omit<Message, "attempt">[];
+    /** Timestamp when the batch was created. */
     sent: number;
+    /** The current attempt number for the batch (1-based). */
     attempt: number;
 }
 
@@ -79,6 +168,9 @@ interface StoredBatchMeta {
     attempt: number;
 }
 
+/**
+ * A lightweight, type-safe Redis-based message queue for Bun.
+ */
 export class RedisQ {
     private redis: BunRedisClient;
     private redisUrl: string;
@@ -87,6 +179,10 @@ export class RedisQ {
     private batchJobs: Map<string, Cron> = new Map();
     private isClosing = false;
 
+    /**
+     * Initializes the RedisQ client.
+     * @param options - Options for initializing the client.
+     */
     constructor(options: QueueOptions) {
         if ("redis" in options) {
             this.redis = options.redis;
@@ -117,6 +213,11 @@ export class RedisQ {
         return qname.endsWith(":batch");
     }
 
+    /**
+     * Creates a new queue with the specified options.
+     * @param options - Options for creating the queue.
+     * @returns `true` if the queue was created, `false` if it already exists.
+     */
     async createQueue<QueueName extends string>(
         options: CreateQueueOptions<QueueName>,
     ): Promise<boolean> {
@@ -156,6 +257,10 @@ export class RedisQ {
         return true;
     }
 
+    /**
+     * Lists all queue names.
+     * @returns An array of queue names.
+     */
     async listQueues(): Promise<string[]> {
         const pattern = `${this.ns}:*`;
         const keys = await this.redis.keys(pattern);
@@ -165,6 +270,11 @@ export class RedisQ {
             .filter((k) => !k.includes(":") || k.endsWith(":batch"));
     }
 
+    /**
+     * Gets the attributes of a queue.
+     * @param qname - The name of the queue.
+     * @returns The queue attributes, or `null` if the queue does not exist.
+     */
     async getQueue(qname: string): Promise<QueueAttributes | null> {
         const key = this.getKey(qname);
         const attrs = await this.redis.hgetall(key);
@@ -198,6 +308,11 @@ export class RedisQ {
         return result;
     }
 
+    /**
+     * Deletes a queue and all its data.
+     * @param qname - The name of the queue to delete.
+     * @returns `true` if the queue was deleted, `false` if it did not exist.
+     */
     async deleteQueue(qname: string): Promise<boolean> {
         const pattern = `${this.ns}:${qname}*`;
         let cursor = "0";
@@ -221,6 +336,11 @@ export class RedisQ {
         return keysFound;
     }
 
+    /**
+     * Sends a message to a regular queue.
+     * @param options - Options for sending the message.
+     * @returns The unique ID of the message.
+     */
     async sendMessage(options: SendMessageOptions): Promise<string> {
         const { qname, message, delay } = options;
 
@@ -272,6 +392,11 @@ export class RedisQ {
         return id;
     }
 
+    /**
+     * Sends a message to a batch queue.
+     * @param options - Options for sending the batch message.
+     * @returns The unique ID of the message.
+     */
     async sendBatchMessage(options: SendBatchMessageOptions): Promise<string> {
         const { qname, batchId, message } = options;
 
@@ -416,6 +541,12 @@ export class RedisQ {
         };
     }
 
+    /**
+     * Manually deletes a message from the queue.
+     * @param qname - The name of the queue.
+     * @param id - The ID of the message to delete.
+     * @returns `true` if the message was deleted, `false` otherwise.
+     */
     async deleteMessage(qname: string, id: string): Promise<boolean> {
         const messagesKey = this.getKey(qname, "messages");
         const deleted = await this.redis.hdel(messagesKey, id);
@@ -597,6 +728,12 @@ export class RedisQ {
         await Promise.all(batchPromises);
     }
 
+    /**
+     * Starts a worker to process messages from a queue.
+     * @param qname - The name of the queue.
+     * @param handler - The function to process messages.
+     * @param options - Options for the worker.
+     */
     async startWorker<QueueName extends `${string}:batch` | (string & {})>(
         qname: QueueName,
         handler: (
@@ -727,6 +864,10 @@ export class RedisQ {
         }
     }
 
+    /**
+     * Stops a specific worker.
+     * @param qname - The name of the queue for which to stop the worker.
+     */
     stopWorker(qname: string): void {
         const controller = this.workers.get(qname);
         if (controller) {
@@ -741,6 +882,9 @@ export class RedisQ {
         }
     }
 
+    /**
+     * Closes all workers and the Redis connection gracefully.
+     */
     async close(): Promise<void> {
         this.isClosing = true;
 
