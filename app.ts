@@ -233,9 +233,8 @@ export class RedisQ {
         }
 
         const key = this.getKey(qname);
-        const exists = await this.redis.exists(key);
 
-        if (exists) {
+        if (await this.redis.exists(key)) {
             return false;
         }
 
@@ -733,6 +732,7 @@ export class RedisQ {
      * @param qname - The name of the queue.
      * @param handler - The function to process messages.
      * @param options - Options for the worker.
+     * @returns `true` if the worker spawned, `false` if it already exists.
      */
     async startWorker<QueueName extends `${string}:batch` | (string & {})>(
         qname: QueueName,
@@ -742,11 +742,11 @@ export class RedisQ {
                 : Message,
         ) => Promise<{ success: boolean }>,
         options: { concurrency?: number; silent?: boolean } = {},
-    ): Promise<void> {
+    ): Promise<boolean> {
         const { concurrency = 1, silent = false } = options;
 
         if (this.workers.has(qname)) {
-            throw new Error(`Worker already running for queue: ${qname}`);
+            return false;
         }
 
         const isBatch = this.isBatchQueue(qname);
@@ -800,6 +800,7 @@ export class RedisQ {
 
             await Promise.all(workers);
         }
+        return true;
     }
 
     private async runWorker(

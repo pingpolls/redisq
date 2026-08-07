@@ -92,7 +92,7 @@ export async function initQueues() {
 }
 ```
 
-Start workers in `src/hooks.server.ts`:
+In `hooks.server.ts`, only `initQueue` should be awaited. The `startWorker` calls must not be awaited, as they are intended to run in the background. Therefore, initialize the queue with `await`, then start the workers without `await` in `src/hooks.server.ts`:
 
 ```typescript
 import { queue, initQueues } from '$lib/server/queue';

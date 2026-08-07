@@ -39,9 +39,10 @@
         "build": "tsc",
         "check": "bun test --timeout 10000",
         "prepack": "bun run build",
+        "release": "bun run build && bun test && bunx --bun npm publish --access public",
         "stress": "bun benchmark/stress.ts"
     },
     "type": "module",
     "types": "./dist/app.d.ts",
-    "version": "1.0.5"
+    "version": "1.0.6"
 }
