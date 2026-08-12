@@ -761,25 +761,29 @@ export class RedisQ {
 
             const every = Number(attrs.every || 60);
 
-            const job = new Cron(`*/${every} * * * * *`, async () => {
-                if (this.isClosing) return;
-                try {
-                    await this.processBatches(
-                        qname,
-                        handler as (
-                            received: BatchMessage,
-                        ) => Promise<{ success: boolean }>,
-                        silent,
-                    );
-                } catch (error) {
-                    if (!silent && !this.isClosing) {
-                        console.error(
-                            "Batch processing error:",
-                            (error as Error).message,
+            const job = new Cron(
+                "* * * * * *",
+                { interval: every, startAt: new Date() },
+                async () => {
+                    if (this.isClosing) return;
+                    try {
+                        await this.processBatches(
+                            qname,
+                            handler as (
+                                received: BatchMessage,
+                            ) => Promise<{ success: boolean }>,
+                            silent,
                         );
+                    } catch (error) {
+                        if (!silent && !this.isClosing) {
+                            console.error(
+                                "Batch processing error:",
+                                (error as Error).message,
+                            );
+                        }
                     }
-                }
-            });
+                },
+            );
 
             this.batchJobs.set(qname, job);
         } else {

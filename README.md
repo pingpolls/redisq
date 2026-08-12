@@ -622,15 +622,15 @@ bun stress
 ```
 
 ✅ Individual Queue Performance:
-  - **Tiny messages (100B)**:   49,302 msg/s (p50: 49.75ms)
-  - **Small messages (1KB)**:   35,061 msg/s (p50: 74.34ms)
-  - **Medium messages (10KB)**:  9,437 msg/s (p50: 213.58ms)
+  - Tiny messages (100B):   124005 msg/s (p50: 21.34ms)
+  - Small messages (1KB):   87045 msg/s (p50: 30.39ms)
+  - Medium messages (10KB):  12721 msg/s (p50: 92.96ms)
 
 💡 Overall (Averaged across all tests):
-  - **Throughput**: ~31,267 messages/second
-  - **Latency (p50)**: 112.56 ms
-  - **Latency (p95)**: 312.11 ms
-  - **Latency (p99)**: 676.23 ms
+  - **Throughput**: ~74,590 messages/second
+  - **Latency (p50)**: 48.23 ms
+  - **Latency (p95)**: 162.69 ms
+  - **Latency (p99)**: 190.80 ms
 
 Tested on Dockerized `redis:alpine` through WSL2 with 1 CPU and 1GB instance.
 
