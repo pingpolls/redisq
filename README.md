@@ -86,7 +86,7 @@ export async function initQueues() {
   await queue.createQueue({ qname: 'emails', maxRetries: 3 });
   await queue.createQueue({ 
     qname: 'analytics:batch', 
-    every: 60, // Process every 60 seconds
+    every: 60, // Process every 60 minutes (hourly)
     maxRetries: 2 
   });
 }
@@ -274,7 +274,7 @@ const queue = new RedisQ({
 await queue.createQueue({ qname: 'webhooks', maxRetries: 3 });
 await queue.createQueue({ 
   qname: 'logs:batch', 
-  every: 30,
+  every: 30, // Process every 30 minutes
   maxRetries: 2 
 });
 
@@ -362,7 +362,7 @@ await queue.createQueue({
 // For batch queues
 await queue.createQueue({
   qname: 'my-queue:batch',
-  every?: 60, // Process every 60 seconds
+  every?: 60, // Process every 60 minutes (hourly)
   maxRetries?: 0,
   maxBackoffSeconds?: 30
 });
@@ -373,7 +373,7 @@ await queue.createQueue({
 - `maxsize` - Maximum message size in bytes (default: 65536)
 - `maxRetries` - Max retry attempts: `0` = no retry, `-1` = unlimited, `n` = max retries (default: 0)
 - `maxBackoffSeconds` - Maximum backoff time for exponential backoff (default: 30)
-- `every` - Batch processing interval in seconds (batch queues only, default: 60)
+- `every` - Batch processing interval in minutes (batch queues only, default: 60). Values below 60 run every N minutes; exact multiples of 60 run every N hours; exact multiples of 1440 run every N days.
 
 ### sendMessage
 
@@ -528,7 +528,7 @@ When a worker returns `{ success: false }` or throws an error:
 Batch queues collect messages over time and process them together:
 
 1. Messages are grouped by `batchId`
-2. Every `every` seconds, all pending batches are processed
+2. At each scheduled `every`-minute interval, all pending batches are processed
 3. Each batch is processed independently
 4. If a batch fails, only that batch is retried
 5. Successful batches are deleted immediately
@@ -578,9 +578,9 @@ REDIS_TLS=false
 5. **Graceful Shutdown**: Always call `queue.close()` on app shutdown
 
 6. **Batch Sizing**: Choose appropriate `every` intervals based on your workload
-   - High frequency: 10-30 seconds
-   - Medium frequency: 60-300 seconds
-   - Low frequency: 300-3600 seconds
+   - High frequency: 10-30 minutes
+   - Medium frequency: 60-300 minutes (1-5 hours)
+   - Low frequency: 360-1440 minutes (6-24 hours)
 
 ## Testing
 
