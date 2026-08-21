@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import type { BatchMessage } from "./app";
 import { RedisQ } from "./app";
 
 const redisConfig = {
@@ -11,15 +12,11 @@ const workerConfig = {
     silent: true,
 };
 
-/**
- * Helper to wait for a specific duration
- */
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 describe("RedisQ Tests", () => {
     test("1. Can send and receive single message", async () => {
         const queue = new RedisQ(redisConfig);
 
+        await queue.deleteQueue("test-basic");
         await queue.createQueue({ qname: "test-basic" });
 
         const message = JSON.stringify({ id: 1, name: "John Doe" });
@@ -53,6 +50,7 @@ describe("RedisQ Tests", () => {
     test("2. Can send and receive delayed message", async () => {
         const queue = new RedisQ(redisConfig);
 
+        await queue.deleteQueue("test-delayed");
         await queue.createQueue({ qname: "test-delayed" });
 
         const message = "Delayed message";
@@ -99,6 +97,7 @@ describe("RedisQ Tests", () => {
     test("3. Can retry send and receive single message", async () => {
         const queue = new RedisQ(redisConfig);
 
+        await queue.deleteQueue("test-retry");
         await queue.createQueue({
             maxBackoffSeconds: 1,
             maxRetries: 3,
@@ -143,6 +142,7 @@ describe("RedisQ Tests", () => {
     test("4. Can retry send and receive delayed message", async () => {
         const queue = new RedisQ(redisConfig);
 
+        await queue.deleteQueue("test-delayed-retry");
         await queue.createQueue({
             maxBackoffSeconds: 1,
             maxRetries: 2,
@@ -201,21 +201,35 @@ describe("RedisQ Tests", () => {
         const queue = new RedisQ(redisConfig);
 
         /**
-         * Create batch queue with 3-second interval
-         * This simulates a spreadsheet-queue:batch with shorter period for testing
+         * Create batch queue with a 1-hour interval. We never wait for this
+         * to actually fire — see `processBatchesNow` below — so the value
+         * itself doesn't affect test runtime. `getNextBatchRun` lets us
+         * sanity-check the schedule Bun.cron would compute without waiting
+         * on it.
          */
+        await queue.deleteQueue("spreadsheet-queue:batch");
         await queue.createQueue({
-            every: 3,
+            every: 60,
             maxRetries: 0,
             qname: "spreadsheet-queue:batch",
         });
+
+        const runAt = new Date();
+        const nextRun = await queue.getNextBatchRun(
+            "spreadsheet-queue:batch",
+            runAt,
+        );
+        expect(nextRun).not.toBeNull();
+        const deltaMs = (nextRun as Date).getTime() - runAt.getTime();
+        expect(deltaMs).toBeGreaterThan(0);
+        expect(deltaMs).toBeLessThanOrEqual(60 * 60 * 1000);
 
         /**
          * Simulate the scenario:
          * - 10 messages sent at different timestamps
          * - 6 messages with batchId "batch-001"
          * - 4 messages with batchId "batch-002"
-         * - All should be processed in the SAME 3-second period
+         * - All should be processed in the SAME batch pass
          */
         const batch001Messages: string[] = [];
         const batch002Messages: string[] = [];
@@ -223,11 +237,6 @@ describe("RedisQ Tests", () => {
         const processedBatches = new Set<string>();
         let batch001Processed = false;
         let batch002Processed = false;
-
-        /**
-         * Send messages FIRST, then start worker
-         * This allows all messages to be ready before the first cron cycle
-         */
 
         /**
          * Send 6 messages to batch-001
@@ -256,66 +265,43 @@ describe("RedisQ Tests", () => {
         }
 
         /**
-         * Start worker AFTER sending messages
-         * This ensures all messages are already pending when the cron starts
+         * Trigger a single batch-processing pass directly, instead of
+         * starting a worker and waiting for the real cron schedule to fire.
+         * Both batches are pending, so one pass should process both.
          */
-        const workerPromise = new Promise<void>((resolve) => {
-            queue.startWorker(
-                "spreadsheet-queue:batch",
-                async (received) => {
-                    processedBatches.add(received.batchId);
+        await queue.processBatchesNow(
+            "spreadsheet-queue:batch",
+            async (received) => {
+                processedBatches.add(received.batchId);
 
-                    if (received.batchId === "batch-001") {
-                        expect(received.messages.length).toBe(6);
-                        expect(received.attempt).toBe(1);
+                if (received.batchId === "batch-001") {
+                    expect(received.messages.length).toBe(6);
+                    expect(received.attempt).toBe(1);
 
-                        /**
-                         * Verify all messages are present
-                         */
-                        received.messages.forEach((msg, idx) => {
-                            expect(msg.message).toBe(
-                                batch001Messages.at(idx) ?? "",
-                            );
-                        });
+                    received.messages.forEach((msg, idx) => {
+                        expect(msg.message).toBe(
+                            batch001Messages.at(idx) ?? "",
+                        );
+                    });
 
-                        batch001Processed = true;
-                    } else if (received.batchId === "batch-002") {
-                        expect(received.messages.length).toBe(4);
-                        expect(received.attempt).toBe(1);
+                    batch001Processed = true;
+                } else if (received.batchId === "batch-002") {
+                    expect(received.messages.length).toBe(4);
+                    expect(received.attempt).toBe(1);
 
-                        received.messages.forEach((msg, idx) => {
-                            expect(msg.message).toBe(
-                                batch002Messages.at(idx) ?? "",
-                            );
-                        });
+                    received.messages.forEach((msg, idx) => {
+                        expect(msg.message).toBe(
+                            batch002Messages.at(idx) ?? "",
+                        );
+                    });
 
-                        batch002Processed = true;
-                    }
+                    batch002Processed = true;
+                }
 
-                    /**
-                     * Resolve when both batches are processed
-                     */
-                    if (batch001Processed && batch002Processed) {
-                        resolve();
-                    }
-
-                    return { success: true };
-                },
-                workerConfig,
-            );
-        });
-
-        /**
-         * Wait for batches to be processed
-         * The cron job will run every 3 seconds and process all pending batches
-         * Allow up to 6 seconds for processing (2 cron cycles to be safe)
-         */
-        await Promise.race([
-            workerPromise,
-            sleep(6000).then(() => {
-                throw new Error("Test timeout: batches not processed in time");
-            }),
-        ]);
+                return { success: true };
+            },
+            workerConfig,
+        );
 
         /**
          * Assert both batches were processed
@@ -331,10 +317,14 @@ describe("RedisQ Tests", () => {
         const queue = new RedisQ(redisConfig);
 
         /**
-         * Create batch queue with 2-second interval and retry enabled
+         * Create batch queue with retry enabled. We drive retries by
+         * calling `processBatchesNow` repeatedly ourselves (each call is a
+         * standalone pass, same as one real cron fire) instead of waiting
+         * for the actual schedule.
          */
+        await queue.deleteQueue("retry-test:batch");
         await queue.createQueue({
-            every: 2,
+            every: 60,
             maxBackoffSeconds: 1,
             maxRetries: 3,
             qname: "retry-test:batch",
@@ -357,94 +347,55 @@ describe("RedisQ Tests", () => {
             });
         }
 
+        const handler = async (received: BatchMessage) => {
+            processedBatches.push({
+                attempt: received.attempt,
+                batchId: received.batchId,
+                success: false,
+            });
+
+            /**
+             * Simulate batch-001 failing on first 2 attempts
+             * batch-002 and batch-003 always succeed
+             */
+            if (received.batchId === "batch-001") {
+                if (received.attempt < 3) {
+                    const lastBatch = processedBatches.at(-1);
+                    if (lastBatch) {
+                        lastBatch.success = false;
+                    }
+                    return { success: false };
+                }
+
+                expect(received.attempt).toBe(3);
+                const lastBatch = processedBatches.at(-1);
+                if (lastBatch) {
+                    lastBatch.success = true;
+                }
+            } else {
+                expect(received.attempt).toBe(1);
+                const lastBatch = processedBatches.at(-1);
+                if (lastBatch) {
+                    lastBatch.success = true;
+                }
+            }
+
+            return { success: true };
+        };
+
         /**
-         * Start worker AFTER sending messages
+         * Run 3 passes: batch-001 needs 3 attempts to succeed, so 3 calls
+         * to processBatchesNow covers it. batch-002/003 succeed on their
+         * first pass and are removed from pending-batches, so later passes
+         * are no-ops for them.
          */
-        const workerPromise = new Promise<void>((resolve) => {
-            queue.startWorker(
+        for (let pass = 0; pass < 3; pass++) {
+            await queue.processBatchesNow(
                 "retry-test:batch",
-                async (received) => {
-                    processedBatches.push({
-                        attempt: received.attempt,
-                        batchId: received.batchId,
-                        success: false,
-                    });
-
-                    /**
-                     * Simulate batch-001 failing on first 2 attempts
-                     * batch-002 and batch-003 always succeed
-                     */
-                    if (received.batchId === "batch-001") {
-                        if (received.attempt < 3) {
-                            /**
-                             * Mark as failed, will retry
-                             */
-                            const lastBatch = processedBatches.at(-1);
-                            if (lastBatch) {
-                                lastBatch.success = false;
-                            }
-                            return { success: false };
-                        }
-                        /**
-                         * 3rd attempt succeeds
-                         */
-                        expect(received.attempt).toBe(3);
-                        const lastBatch = processedBatches.at(-1);
-                        if (lastBatch) {
-                            lastBatch.success = true;
-                        }
-                    } else {
-                        /**
-                         * batch-002 and batch-003 succeed immediately
-                         */
-                        expect(received.attempt).toBe(1);
-                        const lastBatch = processedBatches.at(-1);
-                        if (lastBatch) {
-                            lastBatch.success = true;
-                        }
-                    }
-
-                    /**
-                     * Check if all batches are done:
-                     * - batch-001: should appear 3 times (attempt 1, 2, 3)
-                     * - batch-002: should appear 1 time (attempt 1)
-                     * - batch-003: should appear 1 time (attempt 1)
-                     * Total: 5 invocations
-                     */
-                    const batch001Count = processedBatches.filter(
-                        (b) => b.batchId === "batch-001",
-                    ).length;
-                    const batch002Count = processedBatches.filter(
-                        (b) => b.batchId === "batch-002",
-                    ).length;
-                    const batch003Count = processedBatches.filter(
-                        (b) => b.batchId === "batch-003",
-                    ).length;
-
-                    if (
-                        batch001Count === 3 &&
-                        batch002Count === 1 &&
-                        batch003Count === 1
-                    ) {
-                        resolve();
-                    }
-
-                    return { success: true };
-                },
+                handler,
                 workerConfig,
             );
-        });
-
-        /**
-         * Wait for all batches to be processed (including retries)
-         * Allow up to 10 seconds (batch-001 will take multiple cycles)
-         */
-        await Promise.race([
-            workerPromise,
-            sleep(10000).then(() => {
-                throw new Error("Test timeout: batches not processed in time");
-            }),
-        ]);
+        }
 
         /**
          * Verify total handler invocations
@@ -511,6 +462,7 @@ describe("RedisQ Tests", () => {
 
         const queue = new RedisQ(redisConfig);
 
+        await queue.deleteQueue("test-concurrency");
         await queue.createQueue({ qname: "test-concurrency" });
 
         const processedIds: string[] = [];
@@ -547,6 +499,58 @@ describe("RedisQ Tests", () => {
         }
 
         expect(receivedCount).toBe(totalMessages);
+
+        await queue.close();
+    });
+
+    test("8. Batch cron scheduling: next run stays within the configured interval", async () => {
+        const queue = new RedisQ(redisConfig);
+
+        /**
+         * `every` is in minutes and gets converted internally to a native
+         * Bun.cron expression (see RedisQ#buildCronExpression):
+         *   60   -> "0 * * * *"     (hourly)
+         *   360  -> "0 *\/6 * * *"   (every 6 hours)
+         *   720  -> "0 *\/12 * * *"  (every 12 hours)
+         *   1440 -> "0 0 * * *"     (daily)
+         *
+         * Because these fire on fixed wall-clock boundaries rather than
+         * "creation time + interval", we can't assert nextRun === runAt +
+         * interval exactly. What IS guaranteed: nextRun is strictly after
+         * runAt, and never more than one full interval away — since every
+         * divisor here (1, 6, 12, 24) evenly divides its field's range.
+         */
+        const cases: Array<{ qname: string; every: number; label: string }> = [
+            { every: 60, label: "1 hour", qname: "cron-check-1h:batch" },
+            { every: 360, label: "6 hours", qname: "cron-check-6h:batch" },
+            { every: 720, label: "12 hours", qname: "cron-check-12h:batch" },
+            { every: 1440, label: "1 day", qname: "cron-check-1d:batch" },
+        ];
+
+        for (const { qname, every, label } of cases) {
+            await queue.deleteQueue(qname);
+            await queue.createQueue({
+                every,
+                qname: qname as `${string}:batch`,
+            });
+
+            const runAt = new Date();
+            const nextRun = await queue.getNextBatchRun(qname, runAt);
+
+            expect(nextRun).not.toBeNull();
+
+            const intervalMs = every * 60 * 1000;
+            const deltaMs = (nextRun as Date).getTime() - runAt.getTime();
+
+            expect(
+                deltaMs,
+                `${label}: next run should be after runAt`,
+            ).toBeGreaterThan(0);
+            expect(
+                deltaMs,
+                `${label}: next run should be within one interval of runAt`,
+            ).toBeLessThanOrEqual(intervalMs);
+        }
 
         await queue.close();
     });

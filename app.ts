@@ -1,5 +1,4 @@
 import { RedisClient as BunRedisClient } from "bun";
-import { Cron } from "croner";
 
 /**
  * Options for initializing the RedisQ client.
@@ -53,7 +52,14 @@ export type CreateQueueOptions<QueueName extends string = string> =
                */
               maxBackoffSeconds?: number;
               /**
-               * Batch processing interval in seconds.
+               * Batch processing interval, in minutes.
+               *
+               * Internally converted to a native cron expression and scheduled
+               * via `Bun.cron`. Supported values:
+               * - `< 60`: fires every N minutes (`*\/N * * * *`)
+               * - exact multiple of `60` (and `< 1440`): fires every N hours (`0 *\/N * * *`)
+               * - exact multiple of `1440`: fires every N days (`0 0 *\/N * *`)
+               *
                * @default 60
                */
               every?: number;
@@ -97,7 +103,7 @@ export interface QueueAttributes {
     maxRetries: number;
     /** Maximum backoff time in seconds for exponential backoff. */
     maxBackoffSeconds: number;
-    /** Batch processing interval in seconds (for batch queues only). */
+    /** Batch processing interval, in minutes (for batch queues only). */
     every?: number;
 }
 
@@ -176,7 +182,7 @@ export class RedisQ {
     private redisUrl: string;
     private ns: string;
     private workers: Map<string, AbortController> = new Map();
-    private batchJobs: Map<string, Cron> = new Map();
+    private batchJobs: Map<string, Bun.CronJob> = new Map();
     private isClosing = false;
 
     /**
@@ -211,6 +217,45 @@ export class RedisQ {
 
     private isBatchQueue(qname: string): boolean {
         return qname.endsWith(":batch");
+    }
+
+    /**
+     * Converts a batch queue's `every` (minutes) setting into a native
+     * 5-field cron expression suitable for `Bun.cron`.
+     *
+     * - `< 60`            -> every N minutes: `*\/N * * * *`
+     * - multiple of `60`  -> every N hours:   `0 *\/N * * *`
+     * - multiple of `1440`-> every N days:    `0 0 *\/N * *`
+     *
+     * Multiples of 1440 are checked before multiples of 60 so a full-day
+     * interval (e.g. 1440, 2880) resolves to a daily expression rather than
+     * an hourly one.
+     */
+    private buildCronExpression(everyMinutes: number): string {
+        if (!Number.isFinite(everyMinutes) || everyMinutes <= 0) {
+            throw new Error(
+                "Invalid batch interval: `every` must be a positive number of minutes",
+            );
+        }
+
+        if (everyMinutes < 60) {
+            return `*/${everyMinutes} * * * *`;
+        }
+
+        if (everyMinutes % 1440 === 0) {
+            const days = everyMinutes / 1440;
+            return days === 1 ? "0 0 * * *" : `0 0 */${days} * *`;
+        }
+
+        if (everyMinutes % 60 === 0) {
+            const hours = everyMinutes / 60;
+            return `0 */${hours} * * *`;
+        }
+
+        throw new Error(
+            "Invalid batch interval: `every` must be under 60 minutes, or an exact " +
+                "multiple of 60 (hours) or 1440 (days)",
+        );
     }
 
     /**
@@ -249,7 +294,10 @@ export class RedisQ {
         };
 
         if (isBatch && "every" in options) {
-            attrs.every = options.every ?? 60;
+            const every = options.every ?? 60;
+            // Validate eagerly so bad config fails at createQueue, not startWorker.
+            this.buildCronExpression(every);
+            attrs.every = every;
         }
 
         await this.redis.hset(key, attrs);
@@ -305,6 +353,37 @@ export class RedisQ {
         }
 
         return result;
+    }
+
+    /**
+     * Computes the next scheduled run time for a batch queue's cron job,
+     * relative to `from` (defaults to now), without starting a worker or
+     * waiting on the real clock. Useful for testing/inspection.
+     *
+     * @param qname - The name of the batch queue.
+     * @param from - The reference point to compute the next run from.
+     * @returns The next `Date` the batch job would fire, or `null` if the
+     *          queue does not exist or is not a batch queue.
+     */
+    async getNextBatchRun(
+        qname: string,
+        from: Date = new Date(),
+    ): Promise<Date | null> {
+        if (!this.isBatchQueue(qname)) {
+            return null;
+        }
+
+        const key = this.getKey(qname);
+        const attrs = await this.redis.hgetall(key);
+
+        if (!attrs || Object.keys(attrs).length === 0) {
+            return null;
+        }
+
+        const every = Number(attrs.every || 60);
+        const cronExpr = this.buildCronExpression(every);
+
+        return Bun.cron.parse(cronExpr, from);
     }
 
     /**
@@ -728,6 +807,34 @@ export class RedisQ {
     }
 
     /**
+     * Manually runs a single batch-processing pass for a batch queue,
+     * without waiting for its cron schedule to fire. This is the same
+     * logic `startWorker` invokes on each cron tick — grouping pending
+     * batches, calling `handler` on each, and applying success/retry
+     * bookkeeping — exposed directly so business logic (grouping, retry
+     * counts) can be tested independently of real-clock timing. Use
+     * `getNextBatchRun` separately to assert on the schedule itself.
+     *
+     * @param qname - The name of the batch queue.
+     * @param handler - The function to process each pending batch.
+     * @param options - `silent` suppresses error logging, same as `startWorker`.
+     */
+    async processBatchesNow(
+        qname: string,
+        handler: (batch: BatchMessage) => Promise<{ success: boolean }>,
+        options: { silent?: boolean } = {},
+    ): Promise<void> {
+        if (!this.isBatchQueue(qname)) {
+            throw new Error(
+                "processBatchesNow is only valid for batch queues (qname must end with ':batch')",
+            );
+        }
+
+        const { silent = false } = options;
+        await this.processBatches(qname, handler, silent);
+    }
+
+    /**
      * Starts a worker to process messages from a queue.
      * @param qname - The name of the queue.
      * @param handler - The function to process messages.
@@ -760,30 +867,30 @@ export class RedisQ {
             }
 
             const every = Number(attrs.every || 60);
+            const cronExpr = this.buildCronExpression(every);
 
-            const job = new Cron(
-                "* * * * * *",
-                { interval: every, startAt: new Date() },
-                async () => {
-                    if (this.isClosing) return;
-                    try {
-                        await this.processBatches(
-                            qname,
-                            handler as (
-                                received: BatchMessage,
-                            ) => Promise<{ success: boolean }>,
-                            silent,
+            // Native Bun.cron: schedule expression + handler. No `interval`/
+            // `startAt` options exist on the real API — the cron expression
+            // itself encodes the cadence.
+            const job = Bun.cron(cronExpr, async () => {
+                if (this.isClosing) return;
+                try {
+                    await this.processBatches(
+                        qname,
+                        handler as (
+                            received: BatchMessage,
+                        ) => Promise<{ success: boolean }>,
+                        silent,
+                    );
+                } catch (error) {
+                    if (!silent && !this.isClosing) {
+                        console.error(
+                            "Batch processing error:",
+                            (error as Error).message,
                         );
-                    } catch (error) {
-                        if (!silent && !this.isClosing) {
-                            console.error(
-                                "Batch processing error:",
-                                (error as Error).message,
-                            );
-                        }
                     }
-                },
-            );
+                }
+            });
 
             this.batchJobs.set(qname, job);
         } else {
