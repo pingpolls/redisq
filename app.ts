@@ -174,6 +174,8 @@ interface StoredBatchMeta {
     attempt: number;
 }
 
+const MAXSIZE_CACHE_TTL_MS = 5_000;
+
 /**
  * A lightweight, type-safe Redis-based message queue for Bun.
  */
@@ -183,6 +185,8 @@ export class RedisQ {
     private ns: string;
     private workers: Map<string, AbortController> = new Map();
     private batchJobs: Map<string, Bun.CronJob> = new Map();
+    private maxSizeCache: Map<string, { maxsize: number; expires: number }> =
+        new Map();
     private isClosing = false;
 
     /**
@@ -213,6 +217,28 @@ export class RedisQ {
 
     private getKey(qname: string, suffix = ""): string {
         return suffix ? `${this.ns}:${qname}:${suffix}` : `${this.ns}:${qname}`;
+    }
+
+    /**
+     * Returns the queue's `maxsize`, cached briefly so the hot send path
+     * doesn't pay an extra Redis round trip per message.
+     */
+    private async getMaxSize(qname: string): Promise<number> {
+        const cached = this.maxSizeCache.get(qname);
+        if (cached && cached.expires > Date.now()) return cached.maxsize;
+
+        const raw = await this.redis.hget(this.getKey(qname), "maxsize");
+        if (raw === null || raw === undefined) {
+            this.maxSizeCache.delete(qname);
+            throw new Error("Queue not found");
+        }
+
+        const maxsize = Number(raw);
+        this.maxSizeCache.set(qname, {
+            expires: Date.now() + MAXSIZE_CACHE_TTL_MS,
+            maxsize,
+        });
+        return maxsize;
     }
 
     private isBatchQueue(qname: string): boolean {
@@ -392,6 +418,7 @@ export class RedisQ {
      * @returns `true` if the queue was deleted, `false` if it did not exist.
      */
     async deleteQueue(qname: string): Promise<boolean> {
+        this.maxSizeCache.delete(qname);
         const pattern = `${this.ns}:${qname}*`;
         let cursor = "0";
         let keysFound = false;
@@ -426,14 +453,8 @@ export class RedisQ {
             throw new Error("Use sendBatchMessage for batch queues");
         }
 
-        const key = this.getKey(qname);
-        const attrs = await this.redis.hgetall(key);
+        const maxsize = await this.getMaxSize(qname);
 
-        if (!attrs || Object.keys(attrs).length === 0) {
-            throw new Error("Queue not found");
-        }
-
-        const maxsize = Number(attrs.maxsize);
         if (message.length > maxsize) {
             throw new Error(`Message too large. Max size: ${maxsize}`);
         }
@@ -482,14 +503,8 @@ export class RedisQ {
             throw new Error("Use sendMessage for non-batch queues");
         }
 
-        const key = this.getKey(qname);
-        const attrs = await this.redis.hgetall(key);
+        const maxsize = await this.getMaxSize(qname);
 
-        if (!attrs || Object.keys(attrs).length === 0) {
-            throw new Error("Queue not found");
-        }
-
-        const maxsize = Number(attrs.maxsize);
         if (message.length > maxsize) {
             throw new Error(`Message too large. Max size: ${maxsize}`);
         }
@@ -936,14 +951,12 @@ export class RedisQ {
                         ids as string[],
                     );
 
+                    const succeeded: string[] = [];
                     const processingPromises = messages.map((received) =>
                         handler(received)
                             .then(async ({ success }) => {
                                 if (success) {
-                                    await this.deleteMessage(
-                                        qname,
-                                        received.id,
-                                    );
+                                    succeeded.push(received.id);
                                 } else {
                                     await this.retryMessage(qname, received.id);
                                 }
@@ -959,6 +972,14 @@ export class RedisQ {
                             }),
                     );
                     await Promise.all(processingPromises);
+
+                    // One HDEL for the whole batch instead of one per message.
+                    if (succeeded.length > 0) {
+                        await this.redis.send("HDEL", [
+                            this.getKey(qname, "messages"),
+                            ...succeeded,
+                        ]);
+                    }
                 } else {
                     await Bun.sleep(50);
                 }
