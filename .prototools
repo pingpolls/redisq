@@ -1,2 +1,5 @@
-bun = "1.4.0"
-biome = "2.5.9"
+bun = "1.4.4"
+biome = "2.6.2"
+
+[plugins.tools]
+biome = "https://raw.githubusercontent.com/azvyae/proto-plugins/refs/heads/main/plugins/biome.toml"

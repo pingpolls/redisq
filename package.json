@@ -2,8 +2,8 @@
     "author": "PingPolls",
     "description": "RedisQ is simple message queue that utilizes Bun runtime for high performance read/writes.",
     "devDependencies": {
-        "@biomejs/biome": "~2.5.9",
-        "@types/bun": "~1.4.0",
+        "@biomejs/biome": "~2.6.2",
+        "@types/bun": "~1.4.4",
         "typescript": "~5.9.3"
     },
     "exports": {
