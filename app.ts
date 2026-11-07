@@ -14,11 +14,23 @@ export type QueueOptions =
           host: string;
           /** Redis server port. */
           port: string;
-          /** Redis server user. */
+          /**
+           * Redis server user. It goes into a `redis://` URL as given, so
+           * percent-encode it (`encodeURIComponent`) when it can contain
+           * URL-reserved characters such as `@`, `/`, `:` or `#`.
+           */
           user?: string;
-          /** Redis server password. */
+          /**
+           * Redis server password. It goes into a `redis://` URL as given,
+           * so percent-encode it (`encodeURIComponent`) when it can contain
+           * URL-reserved characters such as `@`, `/`, `:` or `#`.
+           */
           password?: string;
-          /** Namespace for all Redis keys. */
+          /**
+           * Namespace for all Redis keys: 1-64 characters from
+           * `a-z A-Z 0-9 _ : -`.
+           * @default "rsmq"
+           */
           namespace?: string;
           /** Whether to use TLS for the connection. */
           tls?: boolean;
@@ -177,11 +189,18 @@ interface StoredBatchMeta {
 const MAXSIZE_CACHE_TTL_MS = 5_000;
 
 /**
+ * Queue names and namespaces become Redis keys and SCAN patterns, so they
+ * may not contain glob characters (`*`, `?`, `[`, `]`, `\`) or whitespace.
+ */
+const QUEUE_NAME_PATTERN = /^[a-zA-Z0-9_:-]{1,160}$/;
+const NAMESPACE_PATTERN = /^[a-zA-Z0-9_:-]{1,64}$/;
+const MAX_BATCH_ID_LENGTH = 256;
+
+/**
  * A lightweight, type-safe Redis-based message queue for Bun.
  */
 export class RedisQ {
     private redis: BunRedisClient;
-    private redisUrl: string;
     private ns: string;
     private workers: Map<string, AbortController> = new Map();
     private batchJobs: Map<string, Bun.CronJob> = new Map();
@@ -196,11 +215,14 @@ export class RedisQ {
     constructor(options: QueueOptions) {
         if ("redis" in options) {
             this.redis = options.redis;
-            this.redisUrl = "redis://localhost:6379";
             this.ns = "rsmq";
         } else {
             const { host, port, user, password, namespace, tls } = options;
             const protocol = tls ? "rediss" : "redis";
+
+            if (namespace !== undefined && !NAMESPACE_PATTERN.test(namespace)) {
+                throw new Error("Invalid namespace");
+            }
 
             let auth = "";
             if (user && password) {
@@ -209,9 +231,18 @@ export class RedisQ {
                 auth = `:${password}@`;
             }
 
-            this.redisUrl = `${protocol}://${auth}${host}:${port}`;
-            this.redis = new BunRedisClient(this.redisUrl);
+            // The URL holds the password, so it is not kept on the instance,
+            // where logging or inspecting the queue would print it.
+            this.redis = new BunRedisClient(
+                `${protocol}://${auth}${host}:${port}`,
+            );
             this.ns = namespace || "rsmq";
+        }
+    }
+
+    private assertQueueName(qname: string): void {
+        if (typeof qname !== "string" || !QUEUE_NAME_PATTERN.test(qname)) {
+            throw new Error("Invalid queue name");
         }
     }
 
@@ -258,9 +289,9 @@ export class RedisQ {
      * an hourly one.
      */
     private buildCronExpression(everyMinutes: number): string {
-        if (!Number.isFinite(everyMinutes) || everyMinutes <= 0) {
+        if (!Number.isInteger(everyMinutes) || everyMinutes <= 0) {
             throw new Error(
-                "Invalid batch interval: `every` must be a positive number of minutes",
+                "Invalid batch interval: `every` must be a positive whole number of minutes",
             );
         }
 
@@ -299,9 +330,7 @@ export class RedisQ {
             maxBackoffSeconds = 30,
         } = options;
 
-        if (!/^[a-zA-Z0-9_:-]{1,160}$/.test(qname)) {
-            throw new Error("Invalid queue name");
-        }
+        this.assertQueueName(qname);
 
         const key = this.getKey(qname);
 
@@ -335,11 +364,26 @@ export class RedisQ {
      * @returns An array of queue names.
      */
     async listQueues(): Promise<string[]> {
+        // SCAN, not KEYS: KEYS blocks the Redis server while it walks the
+        // whole keyspace.
         const pattern = `${this.ns}:*`;
-        const keys = await this.redis.keys(pattern);
+        const keys: string[] = [];
+        let cursor = "0";
+
+        do {
+            const [nextCursor, found] = await this.redis.scan(
+                cursor,
+                "MATCH",
+                pattern,
+                "COUNT",
+                500,
+            );
+            cursor = nextCursor as string;
+            keys.push(...(found as string[]));
+        } while (cursor !== "0");
 
         return keys
-            .map((k) => k.replace(`${this.ns}:`, ""))
+            .map((k) => k.slice(this.ns.length + 1))
             .filter((k) => !k.includes(":") || k.endsWith(":batch"));
     }
 
@@ -349,6 +393,7 @@ export class RedisQ {
      * @returns The queue attributes, or `null` if the queue does not exist.
      */
     async getQueue(qname: string): Promise<QueueAttributes | null> {
+        this.assertQueueName(qname);
         const key = this.getKey(qname);
         const attrs = await this.redis.hgetall(key);
 
@@ -395,6 +440,7 @@ export class RedisQ {
         qname: string,
         from: Date = new Date(),
     ): Promise<Date | null> {
+        this.assertQueueName(qname);
         if (!this.isBatchQueue(qname)) {
             return null;
         }
@@ -418,27 +464,44 @@ export class RedisQ {
      * @returns `true` if the queue was deleted, `false` if it did not exist.
      */
     async deleteQueue(qname: string): Promise<boolean> {
+        this.assertQueueName(qname);
         this.maxSizeCache.delete(qname);
-        const pattern = `${this.ns}:${qname}*`;
-        let cursor = "0";
-        let keysFound = false;
 
-        do {
-            const [nextCursor, keys] = await this.redis.scan(
-                cursor,
-                "MATCH",
-                pattern,
-                "COUNT",
-                500,
-            );
-            cursor = nextCursor as string;
-            if (keys.length > 0) {
-                keysFound = true;
-                await this.redis.del(...keys);
-            }
-        } while (cursor !== "0");
+        // Only this queue's own keys. A prefix pattern such as `ns:mail*`
+        // would also match the keys of `mail-notify` and `mail:batch`.
+        let deleted = Number(
+            await this.redis.del(
+                this.getKey(qname),
+                this.getKey(qname, "messages"),
+                this.getKey(qname, "delayed"),
+                this.getKey(qname, "queue"),
+                this.getKey(qname, "batch-meta"),
+                this.getKey(qname, "pending-batches"),
+            ),
+        );
 
-        return keysFound;
+        if (this.isBatchQueue(qname)) {
+            const pattern = `${this.getKey(qname, "batch")}:*`;
+            let cursor = "0";
+
+            do {
+                const [nextCursor, found] = await this.redis.scan(
+                    cursor,
+                    "MATCH",
+                    pattern,
+                    "COUNT",
+                    500,
+                );
+                cursor = nextCursor as string;
+                if (found.length > 0) {
+                    deleted += Number(
+                        await this.redis.del(...(found as string[])),
+                    );
+                }
+            } while (cursor !== "0");
+        }
+
+        return deleted > 0;
     }
 
     /**
@@ -449,13 +512,14 @@ export class RedisQ {
     async sendMessage(options: SendMessageOptions): Promise<string> {
         const { qname, message, delay } = options;
 
+        this.assertQueueName(qname);
         if (this.isBatchQueue(qname)) {
             throw new Error("Use sendBatchMessage for batch queues");
         }
 
         const maxsize = await this.getMaxSize(qname);
 
-        if (message.length > maxsize) {
+        if (Buffer.byteLength(message, "utf8") > maxsize) {
             throw new Error(`Message too large. Max size: ${maxsize}`);
         }
 
@@ -499,13 +563,24 @@ export class RedisQ {
     async sendBatchMessage(options: SendBatchMessageOptions): Promise<string> {
         const { qname, batchId, message } = options;
 
+        this.assertQueueName(qname);
         if (!this.isBatchQueue(qname)) {
             throw new Error("Use sendMessage for non-batch queues");
         }
 
+        if (
+            typeof batchId !== "string" ||
+            batchId.length === 0 ||
+            batchId.length > MAX_BATCH_ID_LENGTH
+        ) {
+            throw new Error(
+                `Invalid batch id: use 1-${MAX_BATCH_ID_LENGTH} characters`,
+            );
+        }
+
         const maxsize = await this.getMaxSize(qname);
 
-        if (message.length > maxsize) {
+        if (Buffer.byteLength(message, "utf8") > maxsize) {
             throw new Error(`Message too large. Max size: ${maxsize}`);
         }
 
@@ -641,6 +716,7 @@ export class RedisQ {
      * @returns `true` if the message was deleted, `false` otherwise.
      */
     async deleteMessage(qname: string, id: string): Promise<boolean> {
+        this.assertQueueName(qname);
         const messagesKey = this.getKey(qname, "messages");
         const deleted = await this.redis.hdel(messagesKey, id);
         return deleted > 0;
@@ -839,6 +915,7 @@ export class RedisQ {
         handler: (batch: BatchMessage) => Promise<{ success: boolean }>,
         options: { silent?: boolean } = {},
     ): Promise<void> {
+        this.assertQueueName(qname);
         if (!this.isBatchQueue(qname)) {
             throw new Error(
                 "processBatchesNow is only valid for batch queues (qname must end with ':batch')",
@@ -867,6 +944,7 @@ export class RedisQ {
     ): Promise<boolean> {
         const { concurrency = 1, silent = false } = options;
 
+        this.assertQueueName(qname);
         if (this.workers.has(qname)) {
             return false;
         }

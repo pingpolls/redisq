@@ -554,6 +554,180 @@ describe("RedisQ Tests", () => {
 
         await queue.close();
     });
+
+    test("9. deleteQueue removes only its own queue, not queues sharing its prefix", async () => {
+        const queue = new RedisQ(redisConfig);
+        const names = ["del-scope", "del-scope-other", "del-scope:batch"];
+
+        for (const qname of names) {
+            await queue.deleteQueue(qname);
+        }
+        await queue.createQueue({ qname: "del-scope" });
+        await queue.createQueue({ qname: "del-scope-other" });
+        await queue.createQueue({ every: 60, qname: "del-scope:batch" });
+
+        await queue.sendMessage({ message: "a", qname: "del-scope" });
+        await queue.sendMessage({ message: "b", qname: "del-scope-other" });
+        await queue.sendBatchMessage({
+            batchId: "b1",
+            message: "c",
+            qname: "del-scope:batch",
+        });
+
+        expect(await queue.deleteQueue("del-scope")).toBe(true);
+        expect(await queue.getQueue("del-scope")).toBeNull();
+        expect((await queue.getQueue("del-scope-other"))?.msgs).toBe(1);
+        expect((await queue.getQueue("del-scope:batch"))?.isBatch).toBe(true);
+
+        let batches = 0;
+        await queue.processBatchesNow(
+            "del-scope:batch",
+            async (batch) => {
+                batches++;
+                expect(batch.messages.map((m) => m.message)).toEqual(["c"]);
+                return { success: true };
+            },
+            { silent: true },
+        );
+        expect(batches).toBe(1);
+
+        // A batch queue's per-batch keys go with it.
+        await queue.sendBatchMessage({
+            batchId: "b2",
+            message: "d",
+            qname: "del-scope:batch",
+        });
+        expect(await queue.deleteQueue("del-scope:batch")).toBe(true);
+        const redis = new Bun.RedisClient(
+            `redis://${redisConfig.host}:${redisConfig.port}`,
+        );
+        const [, leftover] = (await redis.scan(
+            "0",
+            "MATCH",
+            `${redisConfig.namespace}:del-scope:batch*`,
+            "COUNT",
+            1000,
+        )) as [string, string[]];
+        redis.close();
+        expect(leftover).toEqual([]);
+        expect(await queue.deleteQueue("del-scope:batch")).toBe(false);
+
+        await queue.deleteQueue("del-scope-other");
+        await queue.close();
+    });
+
+    test("10. Rejects queue names and namespaces that are not plain key segments", async () => {
+        expect(() => new RedisQ({ ...redisConfig, namespace: "ns*" })).toThrow(
+            "Invalid namespace",
+        );
+        expect(() => new RedisQ({ ...redisConfig, namespace: "a b" })).toThrow(
+            "Invalid namespace",
+        );
+
+        const queue = new RedisQ(redisConfig);
+        for (const qname of ["*", "test-*", "a?b", "[ab]", "a b", ""]) {
+            await expect(queue.deleteQueue(qname)).rejects.toThrow(
+                "Invalid queue name",
+            );
+            await expect(queue.getQueue(qname)).rejects.toThrow(
+                "Invalid queue name",
+            );
+            await expect(
+                queue.sendMessage({ message: "x", qname }),
+            ).rejects.toThrow("Invalid queue name");
+            await expect(queue.deleteMessage(qname, "id")).rejects.toThrow(
+                "Invalid queue name",
+            );
+            await expect(
+                queue.startWorker(qname, async () => ({ success: true })),
+            ).rejects.toThrow("Invalid queue name");
+        }
+        await expect(
+            queue.sendBatchMessage({
+                batchId: "b",
+                message: "x",
+                qname: "*:batch",
+            }),
+        ).rejects.toThrow("Invalid queue name");
+        await expect(
+            queue.processBatchesNow("*:batch", async () => ({
+                success: true,
+            })),
+        ).rejects.toThrow("Invalid queue name");
+        await expect(queue.getNextBatchRun("*:batch")).rejects.toThrow(
+            "Invalid queue name",
+        );
+        await queue.close();
+    });
+
+    test("11. Enforces maxsize in UTF-8 bytes and bounds batch ids", async () => {
+        const queue = new RedisQ(redisConfig);
+
+        await queue.deleteQueue("size-limit");
+        await queue.deleteQueue("size-limit:batch");
+        await queue.createQueue({ maxsize: 10, qname: "size-limit" });
+        await queue.createQueue({ maxsize: 10, qname: "size-limit:batch" });
+
+        // "é" is 2 bytes: 5 of them fit in 10 bytes, 6 do not.
+        await queue.sendMessage({ message: "ééééé", qname: "size-limit" });
+        await expect(
+            queue.sendMessage({ message: "éééééé", qname: "size-limit" }),
+        ).rejects.toThrow("Message too large");
+        await expect(
+            queue.sendBatchMessage({
+                batchId: "b",
+                message: "éééééé",
+                qname: "size-limit:batch",
+            }),
+        ).rejects.toThrow("Message too large");
+
+        for (const batchId of ["", "x".repeat(257)]) {
+            await expect(
+                queue.sendBatchMessage({
+                    batchId,
+                    message: "ok",
+                    qname: "size-limit:batch",
+                }),
+            ).rejects.toThrow("Invalid batch id");
+        }
+        await queue.sendBatchMessage({
+            batchId: "x".repeat(256),
+            message: "ok",
+            qname: "size-limit:batch",
+        });
+
+        await queue.deleteQueue("size-limit");
+        await queue.deleteQueue("size-limit:batch");
+        await queue.close();
+    });
+
+    test("12. Rejects fractional batch intervals and lists queues", async () => {
+        const queue = new RedisQ(redisConfig);
+
+        await queue.deleteQueue("fraction:batch");
+        await expect(
+            queue.createQueue({ every: 7.5, qname: "fraction:batch" }),
+        ).rejects.toThrow("Invalid batch interval");
+
+        await queue.deleteQueue("listed");
+        await queue.deleteQueue("listed:batch");
+        await queue.createQueue({ qname: "listed" });
+        await queue.createQueue({ qname: "listed:batch" });
+        const listed = await queue.listQueues();
+        expect(listed).toContain("listed");
+        expect(listed).toContain("listed:batch");
+        expect(listed).not.toContain("listed:messages");
+
+        await queue.deleteQueue("listed");
+        await queue.deleteQueue("listed:batch");
+        await queue.close();
+    });
+
+    test("13. Does not keep the connection URL, which holds the password, on the instance", () => {
+        const queue = new RedisQ({ ...redisConfig, password: "s3cret-pw" });
+        expect(Bun.inspect(queue)).not.toContain("s3cret-pw");
+        void queue.close();
+    });
 });
 
 afterAll(async () => {
